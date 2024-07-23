@@ -1,58 +1,48 @@
 import json
 import os
 from io import BytesIO
+
+import torch.cuda
 import uvicorn
 from accelerate import Accelerator
+from configparser import ConfigParser
 from docx import Document
 from typing import List
-
 from docx.opc.exceptions import PackageNotFoundError
 from fastapi import FastAPI, WebSocket, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-
-from translate import check_or_load_model, translate_2_zh, translate_sentences
+from service.translate import check_or_load_model, translate_2_zh, translate_sentences
 from utils.util import delete_folder_contents
-
-
-# 请求基础模型
-class SourceRequest(BaseModel):
-    sentences: str | None = None
-    sentences_path: str = None
-    sentences_dir: str = None
-    output_path: str = './sample_text/result.txt'
-    files_extension: str = "txt"
-    source_lang: str = None
-    target_lang: str = None
-    starting_batch_size: int = 4
-    model_name_or_path: str = None
-    lora_weights_name_or_path: str = None
-    max_length: int = 1024
-    num_beams: int = 5
-    precision: str = None
-    do_sample: bool = False
-    temperature: float = 0.8
-    top_k: int = 100
-    top_p: float = 0.75
-    repetition_penalty: float = 1.0
-    keep_special_tokens: bool = False
-    keep_tokenization_spaces: bool = False
-    num_return_sequences: int = 1
-    force_auto_device_map: bool = False
-    prompt: str = None
-    trust_remote_code: bool = False
-
-
-class ResponseModel(BaseModel):
-    result: str
+from contextlib import asynccontextmanager
+from models.model import *
 
 
 batch_translating: bool = False  # 批量翻译标志
-model_list = {}  # 模型列表
-file_path = './model_map.json'  # 模型映射表
+config = ConfigParser()  # 创建配置解析器对象
 accelerator = None
-app = FastAPI()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global accelerator
+    config.read(os.path.abspath("./config/config.ini"))
+    accelerator = Accelerator()
+    check_or_load_model(config['MODEL_lIST'][config['DEFAULT']['SEQ_TRANSLATE_MODEL']],
+                        quantization=None,
+                        lora_weights_name_or_path=None,
+                        dtype=None,
+                        force_auto_device_map=False,
+                        trust_remote_code=False,
+                        accelerator=accelerator
+                        )
+    yield
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 允许所有源
@@ -60,34 +50,6 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有方法
     allow_headers=["*"],  # 允许所有头
 )
-
-
-# 启动函数，初始化模型列表和模型
-@app.on_event("startup")
-async def startup_event():
-    global model_list,accelerator
-    try:
-        accelerator = Accelerator()
-        with open(file_path, 'r') as file:
-            model_list = json.load(file)
-        print("Contents of the file:", model_list)
-        check_or_load_model(model_list['facebook/nllb-200-1.3B'],
-                            quantization=None,
-                            lora_weights_name_or_path=None,
-                            dtype=None,
-                            force_auto_device_map=False,
-                            trust_remote_code=False,
-                            accelerator=accelerator
-                            )
-        print(model_list)
-    except FileNotFoundError:
-        print(f"File {file_path} not found.")
-    except json.JSONDecodeError:
-        print(f"Error decoding JSON from file {file_path}.")
-
-
-# 设置文件存储的目录
-UPLOAD_DIRECTORY = os.path.abspath("./uploaded/files")
 
 
 # 反馈批量翻译状态
@@ -99,7 +61,7 @@ async def check_batch_translating():
 # 上传文件
 @app.post("/uploadfiles")
 async def create_upload_files(files: List[UploadFile] = File(...)):
-    os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+    os.makedirs(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), exist_ok=True)
     processed_files = []
     errors = []
 
@@ -116,7 +78,7 @@ async def create_upload_files(files: List[UploadFile] = File(...)):
             document = Document(file_stream)
 
             # 生成新的文件名和位置
-            new_file_location = os.path.join(UPLOAD_DIRECTORY, file.filename)
+            new_file_location = os.path.join(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), file.filename)
 
             # 将修改后的文档保存到本地
             document.save(new_file_location)
@@ -149,7 +111,7 @@ async def translate_files(args: SourceRequest):
     try:
         translate_2_zh(
             sentences_path=args.sentences_path,
-            sentences_dir=UPLOAD_DIRECTORY,
+            sentences_dir=os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']),
             files_extension=args.files_extension,
             output_path=args.output_path,
             source_lang=args.source_lang,
@@ -164,7 +126,8 @@ async def translate_files(args: SourceRequest):
             temperature=args.temperature,
             top_k=args.top_k,
             top_p=args.top_p,
-            straight_translate=True if args.model_name_or_path == "facebook/nllb-200-3.3B" or args.model_name_or_path.endswith("3.3B") else False,
+            straight_translate=True if args.model_name_or_path == "facebook/nllb-200-3.3B" or args.model_name_or_path.endswith(
+                "3.3B") else False,
             switch_model_en_2_zh=False if args.model_name_or_path.startswith("(推荐)") else True
         )
     except PackageNotFoundError as ee:
@@ -174,7 +137,7 @@ async def translate_files(args: SourceRequest):
         print(e)
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
     finally:
-        delete_folder_contents(UPLOAD_DIRECTORY)
+        delete_folder_contents(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']))
         batch_translating = False
 
     return JSONResponse(status_code=200, content={"success": True})

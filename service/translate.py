@@ -1,12 +1,11 @@
 import logging
 import os
-
 from docx import Document
 from tqdm import tqdm
 import torch
 from typing import Optional
 from accelerate import Accelerator
-from model import load_model_for_inference
+from utils.util import load_model_for_inference
 from utils.util import delete_folder_contents
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 MODEL_NAME_OR_PATH = ""
 MY_MODEL = None
 MY_TOKENIZER = None
-TMP_FOLDER = os.path.abspath("./tmp_folder")
+TMP_FOLDER = os.path.abspath("../tmp_folder")
 
 
 def encode_string(text):
