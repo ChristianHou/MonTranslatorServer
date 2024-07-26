@@ -1,6 +1,7 @@
 import os
 from transformers import (
     AutoConfig,
+    AutoTokenizer,
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
     BitsAndBytesConfig,
@@ -11,18 +12,20 @@ from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES,
     MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES,
 )
+import ctranslate2 as ct2
 from typing import Optional, Tuple
 import torch
 import json
 
+
 # 加载模型
 def load_model_for_inference(
-    weights_path: str,
-    quantization: Optional[int] = None,
-    lora_weights_name_or_path: Optional[str] = None,
-    torch_dtype: Optional[str] = None,
-    force_auto_device_map: bool = False,
-    trust_remote_code: bool = False,
+        weights_path: str,
+        quantization: Optional[int] = None,
+        lora_weights_name_or_path: Optional[str] = None,
+        torch_dtype: Optional[str] = None,
+        force_auto_device_map: bool = False,
+        trust_remote_code: bool = False,
 ) -> Tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     """
     Load any Decoder model for inference.
@@ -57,7 +60,7 @@ def load_model_for_inference(
     if type(quantization) == str:
         quantization = int(quantization)
     assert (quantization is None) or (
-        quantization in [4, 8]
+            quantization in [4, 8]
     ), f"Quantization must be 4 or 8, or None for FP32/FP16 training. You passed: {quantization}"
 
     print(f"Loading model from {weights_path}")
@@ -69,20 +72,6 @@ def load_model_for_inference(
     torch_dtype = (
         torch_dtype if torch_dtype in ["auto", None] else getattr(torch, torch_dtype)
     )
-
-    if "small100" in weights_path:
-        import transformers
-
-        if transformers.__version__ > "4.34.0":
-            raise ValueError(
-                "Small100 tokenizer is not supported in transformers > 4.34.0. Please "
-                "use transformers <= 4.34.0 if you want to use small100"
-            )
-
-        print(f"Loading custom small100 tokenizer for utils.tokenization_small100")
-        from utils.tokenization_small100 import SMALL100Tokenizer as AutoTokenizer
-    else:
-        from transformers import AutoTokenizer
 
     tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(
         weights_path, add_eos_token=True, trust_remote_code=trust_remote_code, cache_dir='./cache/'
@@ -182,6 +171,16 @@ def load_model_for_inference(
     return model, tokenizer
 
 
+def load_ct2_model_tokenizer(
+        model_path: str,
+        tokenizer_path: str,
+        src_lang: str,
+        device: str = "cpu",
+):
+    translator = ct2.Translator(model_path, device=device)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, src_lang=src_lang)
+    return translator, tokenizer
+
 
 def delete_folder_contents(folder_path):
     for file_name in os.listdir(folder_path):
@@ -190,3 +189,4 @@ def delete_folder_contents(folder_path):
             os.remove(file_path)
         elif os.path.isdir(file_path):
             delete_folder_contents(file_path)
+    os.removedirs(folder_path)

@@ -9,14 +9,14 @@ from configparser import ConfigParser
 from docx import Document
 from typing import List
 from docx.opc.exceptions import PackageNotFoundError
-from fastapi import FastAPI, WebSocket, File, UploadFile, HTTPException
+from fastapi import FastAPI, WebSocket, File, UploadFile, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from service.translate import check_or_load_model, translate_2_zh, translate_sentences
+from service.translate import check_or_load_model, translate_with_task_id, translate_sentences
 from utils.util import delete_folder_contents
+from utils.taskManager import task_manager, TaskStatus
 from contextlib import asynccontextmanager
 from models.model import *
-
 
 batch_translating: bool = False  # 批量翻译标志
 config = ConfigParser()  # 创建配置解析器对象
@@ -60,8 +60,10 @@ async def check_batch_translating():
 
 # 上传文件
 @app.post("/uploadfiles")
-async def create_upload_files(files: List[UploadFile] = File(...)):
-    os.makedirs(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), exist_ok=True)
+async def create_upload_files(request: Request, files: List[UploadFile] = File(...)):
+    client_ip = request.client.host
+    user_directory = os.path.join(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), client_ip)
+    os.makedirs(user_directory, exist_ok=True)
     processed_files = []
     errors = []
 
@@ -78,7 +80,7 @@ async def create_upload_files(files: List[UploadFile] = File(...)):
             document = Document(file_stream)
 
             # 生成新的文件名和位置
-            new_file_location = os.path.join(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), file.filename)
+            new_file_location = os.path.join(user_directory, file.filename)
 
             # 将修改后的文档保存到本地
             document.save(new_file_location)
@@ -100,36 +102,36 @@ async def create_upload_files(files: List[UploadFile] = File(...)):
 
 # 批量翻译
 @app.post("/translate/files", response_model=ResponseModel)
-async def translate_files(args: SourceRequest):
-    global model_list, batch_translating
-    model_name = model_list[args.model_name_or_path]
+async def translate_files(request: Request, args: SourceRequest, background_tasks: BackgroundTasks):
+    global batch_translating
+    model_name = config['MODEL_lIST'][args.model_name_or_path]
     if model_name is None:
         return JSONResponse(status_code=400, content={"error": "Wrong model name!"})
 
     batch_translating = True
-
+    client_ip = request.client.host
+    user_directory = os.path.join(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), client_ip)
     try:
-        translate_2_zh(
-            sentences_path=args.sentences_path,
-            sentences_dir=os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']),
-            files_extension=args.files_extension,
-            output_path=args.output_path,
-            source_lang=args.source_lang,
-            target_lang=args.target_lang,
-            starting_batch_size=args.starting_batch_size,
-            model_name_or_path=model_name,
-            max_length=args.max_length,
-            num_beams=args.num_beams,
-            num_return_sequences=args.num_return_sequences,
-            precision=args.precision,
-            do_sample=args.do_sample,
-            temperature=args.temperature,
-            top_k=args.top_k,
-            top_p=args.top_p,
-            straight_translate=True if args.model_name_or_path == "facebook/nllb-200-3.3B" or args.model_name_or_path.endswith(
-                "3.3B") else False,
-            switch_model_en_2_zh=False if args.model_name_or_path.startswith("(推荐)") else True
-        )
+        task_manager.add_task(client_ip)
+        background_tasks.add_task(translate_with_task_id,
+                                  task_id=client_ip,
+                                  sentences_dir=user_directory,
+                                  output_path=args.output_path,
+                                  source_lang=args.source_lang,
+                                  target_lang=args.target_lang,
+                                  model_name_or_path=model_name,
+                                  straight_translate=True if args.model_name_or_path == "facebook/nllb-200-3.3B" or args.model_name_or_path.endswith(
+                                      "3.3B") else False,
+                                  switch_model_en_2_zh=False if args.model_name_or_path.startswith("(推荐)") else True,
+                                  gen_kwargs={'max_length': 2048,
+                                              'num_beams': 4,
+                                              'do_sample': False,
+                                              'temperature': 0.8,
+                                              'top_k': 50,
+                                              'top_p': 1.0},
+                                  accelerator=accelerator
+                                  )
+
     except PackageNotFoundError as ee:
         print(ee)
         raise HTTPException(status_code=501, detail=f"File not Found: {str(ee)}")
@@ -156,8 +158,7 @@ async def websocket_translate(websocket: WebSocket):
             await websocket.send_text(json.dumps({"error": "Invalid JSON format"}))
             continue
 
-        global model_list
-        model_name = model_list.get(args.get("model_name"))
+        model_name = config['MODEL_lIST'][args.get("model_name")]
         if model_name is None:
             await websocket.send_text(json.dumps({"error": "Wrong model name!"}))
             continue

@@ -1,8 +1,0 @@
-{
-  "facebook/nllb-200-distilled-600M": "./cache/models--facebook--nllb-200-distilled-600M/snapshots/f8d333a098d19b4fd9a8b18f94170487ad3f821d",
-  "facebook/nllb-200-1.3B": "./cache/models--facebook--nllb-200-1.3B/snapshots/b0de46b488af0cf31749cd8da5ed3171e11b2309",
-  "facebook/nllb-200-3.3B": "./cache/models--facebook--nllb-200-3.3B/snapshots/1a07f7d195896b2114afcb79b7b57ab512e7b43e",
-  "bitfit/nllb-200-1.3B": "./cache/NLLB1.3B_bitfit_with_nllb_dataset_directory",
-  "bitfit/nllb-200-3.3B": "./cache/my_nllb3.3B_model_directory",
-  "full/nllb-200-1.3B": "./cache/full_nllb1.3B_model_directory"
-}

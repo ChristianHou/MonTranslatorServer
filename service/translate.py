@@ -5,8 +5,8 @@ from tqdm import tqdm
 import torch
 from typing import Optional
 from accelerate import Accelerator
-from utils.util import load_model_for_inference
-from utils.util import delete_folder_contents
+from utils.util import load_model_for_inference, delete_folder_contents
+from utils.taskManager import update_task_status
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -162,14 +162,9 @@ def translate_folder(folder_path: str,
                      output_folder: str,
                      source_lang: str,
                      target_lang: str,
-                     model_name_or_path: str = "facebook/m2m100_1.2B",
-                     max_length: int = 1024,
-                     num_beams: int = 4,
-                     do_sample: bool = False,
-                     temperature: float = 1.0,
-                     top_k: int = 50,
-                     top_p: float = 1.0,
-                     accelerator: Accelerator = None):
+                     model_name_or_path: str,
+                     accelerator: Accelerator = None,
+                     gen_kwargs: dict = None):
     global MODEL_NAME_OR_PATH, MY_MODEL, MY_TOKENIZER
     # Initialize the Accelerator
     if accelerator is None:
@@ -183,16 +178,6 @@ def translate_folder(folder_path: str,
                         force_auto_device_map=False,
                         trust_remote_code=False,
                         accelerator=accelerator)
-
-    # Configure translation settings
-    gen_kwargs = {
-        "max_length": max_length,
-        "num_beams": num_beams,
-        "do_sample": do_sample,
-        "temperature": temperature,
-        "top_k": top_k,
-        "top_p": top_p
-    }
 
     if source_lang:
         MY_TOKENIZER.src_lang = source_lang
@@ -216,32 +201,15 @@ def translate_folder(folder_path: str,
             print(f"Translated {file_name} and saved to {output_file_path}")
 
 
-def translate_2_zh(sentences_path: Optional[str],
-                   sentences_dir: Optional[str],
-                   files_extension: str,
+def translate_2_zh(sentences_dir: Optional[str],
                    output_path: str,
                    source_lang: Optional[str],
                    target_lang: Optional[str],
-                   starting_batch_size: int,
                    model_name_or_path: str = "facebook/m2m100_1.2B",
-                   lora_weights_name_or_path: str = None,
-                   force_auto_device_map: bool = False,
-                   precision: str = None,
-                   max_length: int = 1024,
-                   num_beams: int = 4,
-                   num_return_sequences: int = 1,
-                   do_sample: bool = False,
-                   temperature: float = 1.0,
-                   top_k: int = 50,
-                   top_p: float = 1.0,
-                   keep_special_tokens: bool = False,
-                   keep_tokenization_spaces: bool = False,
-                   repetition_penalty: float = None,
-                   prompt: str = None,
-                   trust_remote_code: bool = False,
                    straight_translate: bool = False,
                    switch_model_en_2_zh: bool = False,
-                   accelerator: Accelerator = None):
+                   accelerator: Accelerator = None,
+                   gen_kwargs: dict = None):
     os.makedirs(TMP_FOLDER, exist_ok=True)
     # straight_translate = False
     if straight_translate:
@@ -251,13 +219,8 @@ def translate_2_zh(sentences_path: Optional[str],
             source_lang=source_lang,
             target_lang=target_lang,
             model_name_or_path=model_name_or_path,
-            max_length=max_length,
-            num_beams=num_beams,
-            do_sample=do_sample,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            accelerator=accelerator
+            accelerator=accelerator,
+            gen_kwargs=gen_kwargs
         )
     else:
         # 翻译至英文
@@ -267,17 +230,12 @@ def translate_2_zh(sentences_path: Optional[str],
             source_lang=source_lang,
             target_lang="eng_Latn",
             model_name_or_path=model_name_or_path,
-            max_length=max_length,
-            num_beams=num_beams,
-            do_sample=do_sample,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            accelerator=accelerator
+            accelerator=accelerator,
+            gen_kwargs=gen_kwargs
         )
         if switch_model_en_2_zh:
-            model_name_or_path = ('./cache/models--facebook--nllb-200-1.3B/snapshots'
-                                  '/b0de46b488af0cf31749cd8da5ed3171e11b2309')
+            model_name_or_path = ('./cache/models--facebook--nllb-200-distilled-600M/snapshots'
+                                  '/f8d333a098d19b4fd9a8b18f94170487ad3f821d')
         # 英译中
         translate_folder(
             folder_path=TMP_FOLDER,
@@ -285,12 +243,29 @@ def translate_2_zh(sentences_path: Optional[str],
             source_lang="eng_Latn",
             target_lang=target_lang,
             model_name_or_path=model_name_or_path,
-            max_length=max_length,
-            num_beams=num_beams,
-            do_sample=do_sample,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            accelerator=accelerator
+            accelerator=accelerator,
+            gen_kwargs=gen_kwargs
         )
         delete_folder_contents(TMP_FOLDER)
+
+
+@update_task_status
+def translate_with_task_id(task_id: str,
+                           sentences_dir: Optional[str],
+                           output_path: str,
+                           source_lang: Optional[str],
+                           target_lang: Optional[str],
+                           model_name_or_path: str = "facebook/m2m100_1.2B",
+                           straight_translate: bool = False,
+                           switch_model_en_2_zh: bool = False,
+                           accelerator: Accelerator = None,
+                           gen_kwargs: dict = None):
+    translate_2_zh(sentences_dir=sentences_dir,
+                   output_path=output_path,
+                   source_lang=source_lang,
+                   target_lang=target_lang,
+                   model_name_or_path=model_name_or_path,
+                   straight_translate=straight_translate,
+                   switch_model_en_2_zh=switch_model_en_2_zh,
+                   gen_kwargs=gen_kwargs,
+                   accelerator=accelerator)
