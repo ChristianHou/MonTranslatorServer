@@ -189,4 +189,3 @@ def delete_folder_contents(folder_path):
             os.remove(file_path)
         elif os.path.isdir(file_path):
             delete_folder_contents(file_path)
-    os.removedirs(folder_path)

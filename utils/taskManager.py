@@ -27,6 +27,9 @@ class TaskManager:
     def get_task_status(self, task_id: str) -> None:
         return self.tasks.get(task_id, None)
 
+    def delete_task_status(self, task_id: str) -> None:
+        del self.tasks[task_id]
+
 
 # 实例化一个全局的任务管理器
 task_manager = TaskManager()
@@ -41,6 +44,7 @@ def update_task_status(func):
             task_manager.update_task_status(task_id, TaskStatus.COMPLETED)
             return result
         except Exception as e:
-            task_manager.update_task_status(task_id, TaskStatus.QUEUED)
+            task_manager.update_task_status(task_id, TaskStatus.FAILED)
             raise e
+
     return wrapper

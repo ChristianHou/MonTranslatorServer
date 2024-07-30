@@ -1,41 +1,36 @@
 import json
 import os
 from io import BytesIO
-
 import torch.cuda
 import uvicorn
-from accelerate import Accelerator
+from pathlib import Path
+from zipfile import ZipFile
 from configparser import ConfigParser
 from docx import Document
 from typing import List
 from docx.opc.exceptions import PackageNotFoundError
 from fastapi import FastAPI, WebSocket, File, UploadFile, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from service.translate import check_or_load_model, translate_with_task_id, translate_sentences
-from utils.util import delete_folder_contents
+from fastapi.responses import JSONResponse, FileResponse
+from service.translate import translate_sentences, translate_folder_with_task_id
 from utils.taskManager import task_manager, TaskStatus
 from contextlib import asynccontextmanager
 from models.model import *
+from models.translateModel import TranslatorSingleton
 
-batch_translating: bool = False  # 批量翻译标志
+# batch_translating: bool = False  # 批量翻译标志
 config = ConfigParser()  # 创建配置解析器对象
-accelerator = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global accelerator
     config.read(os.path.abspath("./config/config.ini"))
-    accelerator = Accelerator()
-    check_or_load_model(config['MODEL_lIST'][config['DEFAULT']['SEQ_TRANSLATE_MODEL']],
-                        quantization=None,
-                        lora_weights_name_or_path=None,
-                        dtype=None,
-                        force_auto_device_map=False,
-                        trust_remote_code=False,
-                        accelerator=accelerator
-                        )
+    TranslatorSingleton.get_cpu_model()
+    TranslatorSingleton.get_cuda_model()
+    # 预加载tokenizer
+    TranslatorSingleton._load_tokenizer("khk_Cyrl")
+    TranslatorSingleton._load_tokenizer("eng_Latn")
     yield
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -52,10 +47,10 @@ app.add_middleware(
 )
 
 
-# 反馈批量翻译状态
-@app.get("/check_batch_translating")
-async def check_batch_translating():
-    return JSONResponse(content={"result": batch_translating})
+# # 反馈批量翻译状态
+# @app.get("/check_batch_translating")
+# async def check_batch_translating():
+#     return JSONResponse(content={"result": batch_translating})
 
 
 # 上传文件
@@ -104,34 +99,20 @@ async def create_upload_files(request: Request, files: List[UploadFile] = File(.
 @app.post("/translate/files", response_model=ResponseModel)
 async def translate_files(request: Request, args: SourceRequest, background_tasks: BackgroundTasks):
     global batch_translating
-    model_name = config['MODEL_lIST'][args.model_name_or_path]
-    if model_name is None:
-        return JSONResponse(status_code=400, content={"error": "Wrong model name!"})
 
     batch_translating = True
     client_ip = request.client.host
     user_directory = os.path.join(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), client_ip)
+    output_dictionary = os.path.join(os.path.abspath(config['DEFAULT']['DOWNLOAD_DICTIONARY']), client_ip)
     try:
         task_manager.add_task(client_ip)
-        background_tasks.add_task(translate_with_task_id,
+        background_tasks.add_task(translate_folder_with_task_id,
                                   task_id=client_ip,
-                                  sentences_dir=user_directory,
-                                  output_path=args.output_path,
-                                  source_lang=args.source_lang,
-                                  target_lang=args.target_lang,
-                                  model_name_or_path=model_name,
-                                  straight_translate=True if args.model_name_or_path == "facebook/nllb-200-3.3B" or args.model_name_or_path.endswith(
-                                      "3.3B") else False,
-                                  switch_model_en_2_zh=False if args.model_name_or_path.startswith("(推荐)") else True,
-                                  gen_kwargs={'max_length': 2048,
-                                              'num_beams': 4,
-                                              'do_sample': False,
-                                              'temperature': 0.8,
-                                              'top_k': 50,
-                                              'top_p': 1.0},
-                                  accelerator=accelerator
+                                  input_folder=user_directory,
+                                  output_folder=output_dictionary,
+                                  src_lang=args.source_lang,
+                                  tgt_lang=args.target_lang
                                   )
-
     except PackageNotFoundError as ee:
         print(ee)
         raise HTTPException(status_code=501, detail=f"File not Found: {str(ee)}")
@@ -139,7 +120,7 @@ async def translate_files(request: Request, args: SourceRequest, background_task
         print(e)
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
     finally:
-        delete_folder_contents(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']))
+
         batch_translating = False
 
     return JSONResponse(status_code=200, content={"success": True})
@@ -158,28 +139,45 @@ async def websocket_translate(websocket: WebSocket):
             await websocket.send_text(json.dumps({"error": "Invalid JSON format"}))
             continue
 
-        model_name = config['MODEL_lIST'][args.get("model_name")]
-        if model_name is None:
-            await websocket.send_text(json.dumps({"error": "Wrong model name!"}))
-            continue
-
         sentences = args.get("sentences")
-
-        tmp_translated_sentences = translate_sentences(
-            sentences=sentences,
-            source_lang=args.get('source_lang'),
-            target_lang="eng_Latn",
-            model_name_or_path=model_name
-        )
-        result_data = translate_sentences(
-            sentences=tmp_translated_sentences,
-            source_lang="eng_Latn",
-            target_lang=args.get('target_lang'),
-            model_name_or_path=model_name
-        )
-
+        result_data = translate_sentences(text=sentences, src_lang=args.get('source_lang'),
+                                          tgt_lang=args.get('target_lang'))
         # 发送翻译结果给客户端
         await websocket.send_text(json.dumps({"result": result_data, "error": ''}))
+
+
+# 获取任务状态的接口
+@app.get("/task_status/")
+async def get_task_status(task_id: str):
+    status = task_manager.get_task_status(task_id)
+    if status == TaskStatus.COMPLETED:
+        task_manager.delete_task(task_id)
+    if status is None:
+        return {"task_id": task_id, "result": "No Task"}
+    return {"task_id": task_id, "result": status}
+
+
+@app.get("/download-all")
+async def download_all_files(requset: Request):
+    client_ip = requset.client.host
+    dir_path = Path(os.path.join(config['DEFAULT']['DOWNLOAD_DICTIONARY'], client_ip))
+    zip_path = dir_path / "all_files.zip"
+
+    # 清理之前的zip文件
+    if zip_path.exists():
+        zip_path.unlink()
+
+    # 创建新的zip文件
+    with ZipFile(zip_path, 'w') as zipf:
+        for root, dirs, files in os.walk(dir_path):
+            for file in files:
+                file_path = Path(root) / file
+                zipf.write(file_path, file_path.relative_to(dir_path))
+
+    if zip_path.exists():
+        return FileResponse(zip_path, filename="all_files.zip")
+    else:
+        raise HTTPException(status_code=404, detail="ZIP file creation failed")
 
 
 if __name__ == "__main__":
