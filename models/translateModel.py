@@ -4,6 +4,9 @@ import transformers
 from docx import Document
 from tqdm import tqdm
 from configparser import ConfigParser
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 cfg = ConfigParser()
 cfg.read('./config/config.ini')
@@ -164,3 +167,52 @@ class DocxTranslator(TranslatorSingleton):
                 translated_doc.add_paragraph(para.text)
 
         translated_doc.save(output_path)
+
+
+class TableTranslator(TranslatorSingleton):
+    @staticmethod
+    def translate_text(text, src_lang, tgt_lang):
+        if text is None:
+            return text
+        lines = text.split('\n')
+        translated_lines = [TranslatorSingleton.translate_sentence_with_cuda(line, src_lang, tgt_lang) for line in
+                            lines]
+        return '\n'.join(translated_lines)
+
+    @staticmethod
+    def translate_excel(input_path: str, output_path: str, src_lang: str, tgt_lang: str):
+        wb = load_workbook(input_path)
+
+        for sheet in wb.worksheets:
+            # Dictionary to store merged cell ranges and their translated content
+            translated_cells = {}
+            for row in sheet.iter_rows():
+                for cell in row:
+                    if cell.value and isinstance(cell.value, str):
+                        # Translate the text only if this cell is the first in a merged range or not merged
+                        if cell.coordinate not in translated_cells:
+                            translated_text = TableTranslator.translate_text(cell.value, src_lang, tgt_lang)
+                            translated_cells[cell.coordinate] = translated_text
+
+                            # Apply the translation to all cells in the merged range, if any
+                            for merged_range in sheet.merged_cells.ranges:
+                                if cell.coordinate in merged_range:
+                                    for row in sheet[merged_range.coord]:
+                                        for merged_cell in row:
+                                            translated_cells[merged_cell.coordinate] = translated_text
+
+            # Apply translated values back to the worksheet
+            for coord, translated_text in translated_cells.items():
+                sheet[coord].value = translated_text
+
+            # Reapply the merged cells after translation
+            for merged_cell in sheet.merged_cells.ranges:
+                sheet.merge_cells(str(merged_cell))
+
+        wb.save(output_path)
+
+    @staticmethod
+    def translate_csv(input_path: str, output_path: str, src_lang: str, tgt_lang: str):
+        df = pd.read_csv(input_path)
+        translated_df = df.applymap(lambda x: TableTranslator.translate_text(x, src_lang, tgt_lang) if isinstance(x, str) else x)
+        translated_df.to_csv(output_path, index=False)

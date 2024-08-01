@@ -1,12 +1,12 @@
 import json
 import os
-from io import BytesIO
+import uuid
 import torch.cuda
 import uvicorn
+from utils.logging_config import logger
 from pathlib import Path
 from zipfile import ZipFile
 from configparser import ConfigParser
-from docx import Document
 from typing import List
 from docx.opc.exceptions import PackageNotFoundError
 from fastapi import FastAPI, WebSocket, File, UploadFile, HTTPException, Request, BackgroundTasks
@@ -14,17 +14,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from service.translate import translate_sentences, translate_folder_with_task_id
 from utils.taskManager import task_manager, TaskStatus
+from utils.rateLimiter import rate_limiter, ws_rate_limiter
+from utils.fileHandler import FileHandler
 from contextlib import asynccontextmanager
 from models.model import *
 from models.translateModel import TranslatorSingleton
+from utils.util import delete_folder_contents
 
-# batch_translating: bool = False  # 批量翻译标志
 config = ConfigParser()  # 创建配置解析器对象
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global accelerator
     config.read(os.path.abspath("./config/config.ini"))
     TranslatorSingleton.get_cpu_model()
     TranslatorSingleton.get_cuda_model()
@@ -47,63 +48,34 @@ app.add_middleware(
 )
 
 
-# # 反馈批量翻译状态
-# @app.get("/check_batch_translating")
-# async def check_batch_translating():
-#     return JSONResponse(content={"result": batch_translating})
-
-
 # 上传文件
 @app.post("/uploadfiles")
-async def create_upload_files(request: Request, files: List[UploadFile] = File(...)):
-    client_ip = request.client.host
+@rate_limiter.limit()
+async def create_upload_files(files: List[UploadFile] = File(...)):
+    # client_ip = request.client.host
+    client_ip = str(uuid.uuid4())
     user_directory = os.path.join(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), client_ip)
-    os.makedirs(user_directory, exist_ok=True)
-    processed_files = []
-    errors = []
+    try:
+        FileHandler.process_files(user_directory, files)
+        logger.info(f"Successfully uploaded and processed {len(files)} files from {client_ip}.")
+    except HTTPException as e:
+        logger.error(f"{client_ip} upload failed , {e.detail}.")
+        return JSONResponse(status_code=e.status_code, content={"message": e.detail})
 
-    for file in files:
-        if not file.filename.endswith('.docx'):
-            errors.append(f"Unsupported file type: {file.filename}")
-            continue
-
-        try:
-            # 从上传的文件创建BytesIO对象
-            file_stream = BytesIO(await file.read())
-
-            # 使用BytesIO对象加载DOCX文档
-            document = Document(file_stream)
-
-            # 生成新的文件名和位置
-            new_file_location = os.path.join(user_directory, file.filename)
-
-            # 将修改后的文档保存到本地
-            document.save(new_file_location)
-            processed_files.append(new_file_location)
-
-        except Exception as e:
-            errors.append(f"Error processing file {file.filename}: {str(e)}")
-            continue
-        finally:
-            # 确保关闭文件流
-            file_stream.close()
-
-    if errors:
-        return JSONResponse(status_code=500,
-                            content={"message": "Errors occurred during file upload and processing", "errors": errors})
     return JSONResponse(status_code=200,
-                        content={"message": f"Successfully uploaded and processed {len(processed_files)} files."})
+                        content={"client_id": client_ip,
+                                 "message": f"Successfully uploaded and processed {len(files)} files."})
 
 
 # 批量翻译
-@app.post("/translate/files", response_model=ResponseModel)
+@app.post("/translate/files")
 async def translate_files(request: Request, args: SourceRequest, background_tasks: BackgroundTasks):
-    global batch_translating
-
-    batch_translating = True
-    client_ip = request.client.host
+    # client_ip = request.client.host
+    client_ip = args.client_ip
     user_directory = os.path.join(os.path.abspath(config['DEFAULT']['UPLOAD_DIRECTORY']), client_ip)
     output_dictionary = os.path.join(os.path.abspath(config['DEFAULT']['DOWNLOAD_DICTIONARY']), client_ip)
+    if os.path.exists(output_dictionary):
+        delete_folder_contents(output_dictionary)
     try:
         task_manager.add_task(client_ip)
         background_tasks.add_task(translate_folder_with_task_id,
@@ -113,21 +85,20 @@ async def translate_files(request: Request, args: SourceRequest, background_task
                                   src_lang=args.source_lang,
                                   tgt_lang=args.target_lang
                                   )
+        logger.info(f"Successfully submit task from {client_ip}.")
     except PackageNotFoundError as ee:
-        print(ee)
+        logger.error(f"{client_ip} translate files failed , {ee}.")
         raise HTTPException(status_code=501, detail=f"File not Found: {str(ee)}")
     except Exception as e:
-        print(e)
+        logger.error(f"{client_ip} translate files failed , {e}.")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-    finally:
 
-        batch_translating = False
-
-    return JSONResponse(status_code=200, content={"success": True})
+    return JSONResponse(status_code=200, content={"task_id": client_ip})
 
 
 # websocket接口翻译文本
 @app.websocket("/ws/translate/seq")
+@ws_rate_limiter.limit()
 async def websocket_translate(websocket: WebSocket):
     await websocket.accept()
     while True:
@@ -147,20 +118,24 @@ async def websocket_translate(websocket: WebSocket):
 
 
 # 获取任务状态的接口
-@app.get("/task_status/")
+@app.get("/task_status")
 async def get_task_status(task_id: str):
     status = task_manager.get_task_status(task_id)
     if status == TaskStatus.COMPLETED:
-        task_manager.delete_task(task_id)
+        task_manager.delete_task_status(task_id)
     if status is None:
         return {"task_id": task_id, "result": "No Task"}
     return {"task_id": task_id, "result": status}
 
 
 @app.get("/download-all")
-async def download_all_files(requset: Request):
-    client_ip = requset.client.host
-    dir_path = Path(os.path.join(config['DEFAULT']['DOWNLOAD_DICTIONARY'], client_ip))
+async def download_all_files(task_id: str):
+    dir_path = Path(os.path.join(config['DEFAULT']['DOWNLOAD_DICTIONARY'], task_id))
+
+    # 检查文件夹是否为空
+    if not any(dir_path.iterdir()):
+        raise HTTPException(status_code=404, detail="Directory is empty")
+
     zip_path = dir_path / "all_files.zip"
 
     # 清理之前的zip文件
@@ -175,8 +150,10 @@ async def download_all_files(requset: Request):
                 zipf.write(file_path, file_path.relative_to(dir_path))
 
     if zip_path.exists():
+        logger.info(f"Successfully downloaded all files from {task_id}")
         return FileResponse(zip_path, filename="all_files.zip")
     else:
+        logger.error(f"Failed to download all files from {task_id}")
         raise HTTPException(status_code=404, detail="ZIP file creation failed")
 
 
