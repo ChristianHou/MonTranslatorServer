@@ -5,125 +5,86 @@ from docx import Document
 from tqdm import tqdm
 from configparser import ConfigParser
 import pandas as pd
+import threading
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 
 cfg = ConfigParser()
 cfg.read('./config/config.ini')
 
 
 class TranslatorSingleton:
-    _cpu_instance = None
-    _cuda_instance = None
+    _cpu_instances = []
+    _cuda_instances = []
     _tokenizers = {}
+    _lock = threading.Lock()
 
     @classmethod
-    def get_cpu_model(cls):
-        if cls._cpu_instance is None:
-            cls._cpu_instance = {
+    def initialize_models(cls, num_cpu_models=2, num_cuda_models=2):
+        for _ in range(num_cpu_models):
+            cls._cpu_instances.append({
                 "translator": ctranslate2.Translator(cfg["MODEL_LIST"][cfg["DEFAULT"]["SEQ_TRANSLATE_MODEL"]],
-                                                     intra_threads=4)
-            }
-        return cls._cpu_instance
-
-    @classmethod
-    def get_cuda_model(cls):
-        if cls._cuda_instance is None:
-            cls._cuda_instance = {
+                                                     intra_threads=4),
+                "task_count": threading.Semaphore(10)
+            })
+        for _ in range(num_cuda_models):
+            cls._cuda_instances.append({
                 "translator": ctranslate2.Translator(cfg["MODEL_LIST"][cfg["DEFAULT"]["FILE_TRANSLATE_MODEL"]],
-                                                     device='cuda')
-            }
-        return cls._cuda_instance
+                                                     device='cuda'),
+                "task_count": threading.Semaphore(10)
+            })
 
     @classmethod
     def _load_tokenizer(cls, src_lang: str):
-        if src_lang not in cls._tokenizers:
-            cls._tokenizers[src_lang] = transformers.AutoTokenizer.from_pretrained(
+        if (src_lang, "tokenizer") not in cls._tokenizers:
+            cls._tokenizers[(src_lang, "tokenizer")] = transformers.AutoTokenizer.from_pretrained(
                 cfg["TOKENIZER_LIST"][cfg["DEFAULT"]["SEQ_TRANSLATE_MODEL"]],
                 src_lang=src_lang
             )
-        return cls._tokenizers[src_lang]
+        return cls._tokenizers[(src_lang, "tokenizer")]
 
     @classmethod
-    def translate_sentence(cls, text: str, src_lang: str, tgt_lang: str) -> str:
-        model = cls.get_cpu_model()
-        translator = model["translator"]
-        tokenizer = cls._load_tokenizer(src_lang)
-
-        source = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
-        target_prefix = [tgt_lang]
-        results = translator.translate_batch([source], target_prefix=[target_prefix])
-        target = results[0].hypotheses[0][1:]
-
-        return tokenizer.decode(tokenizer.convert_tokens_to_ids(target))
+    def _get_least_loaded_model(cls, use_cuda=False):
+        instances = cls._cuda_instances if use_cuda else cls._cpu_instances
+        least_loaded_instance = min(instances, key=lambda x: x["task_count"]._value)
+        least_loaded_instance["task_count"].acquire()
+        return least_loaded_instance
 
     @classmethod
-    def translate_sentence_with_cuda(cls, text: str, src_lang: str, tgt_lang: str) -> str:
-        model = cls.get_cuda_model()
-        translator = model["translator"]
-        tokenizer = cls._load_tokenizer(src_lang)
-
-        source = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
-        target_prefix = [tgt_lang]
-        results = translator.translate_batch([source], target_prefix=[target_prefix])
-        target = results[0].hypotheses[0][1:]
-
-        return tokenizer.decode(tokenizer.convert_tokens_to_ids(target))
+    def _release_model(cls, model_instance, use_cuda=False):
+        model_instance["task_count"].release()
 
     @classmethod
-    def translate_batch(cls, texts: list, src_lang: str, tgt_lang: str) -> list:
-        model = cls.get_cpu_model()
-        translator = model["translator"]
-        tokenizer = cls._load_tokenizer(src_lang)
+    def translate_sentence(cls, text: str, src_lang: str, tgt_lang: str, use_cuda=False) -> str:
+        model_instance = cls._get_least_loaded_model(use_cuda)
+        try:
+            translator = model_instance["translator"]
+            tokenizer = cls._load_tokenizer(src_lang)
 
-        sources = [tokenizer.convert_ids_to_tokens(tokenizer.encode(text)) for text in texts]
-        target_prefix = [tgt_lang] * len(texts)
-        results = translator.translate_batch(sources, target_prefix=[target_prefix])
+            source = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
+            target_prefix = [tgt_lang]
+            results = translator.translate_batch([source], target_prefix=[target_prefix])
+            target = results[0].hypotheses[0][1:]
 
-        translations = [tokenizer.decode(tokenizer.convert_tokens_to_ids(result.hypotheses[0][1:])) for result in
-                        results]
-        return translations
-
-    @classmethod
-    def translate_batch_with_cuda(cls, texts: list, src_lang: str, tgt_lang: str) -> list:
-        model = cls.get_cuda_model()
-        translator = model["translator"]
-        tokenizer = cls._load_tokenizer(src_lang)
-
-        sources = [tokenizer.convert_ids_to_tokens(tokenizer.encode(text)) for text in texts]
-        target_prefix = [tgt_lang] * len(texts)
-        results = translator.translate_batch(sources, target_prefix=[target_prefix])
-
-        translations = [tokenizer.decode(tokenizer.convert_tokens_to_ids(result.hypotheses[0][1:])) for result in
-                        results]
-        return translations
+            return tokenizer.decode(tokenizer.convert_tokens_to_ids(target))
+        finally:
+            cls._release_model(model_instance)
 
     @classmethod
-    def translate_sentences_via_intermediate(cls, text: str, src_lang: str, tgt_lang: str) -> str:
-        intermediate_lang = "eng_Latn"
-        # 从 src_lang 翻译到中间语言
-        intermediate_text = cls.translate_sentence(text, src_lang, intermediate_lang)
-        # 从中间语言翻译到 tgt_lang
-        final_text = cls.translate_sentence(intermediate_text, intermediate_lang, tgt_lang)
-        return final_text
+    def translate_batch(cls, texts: list, src_lang: str, tgt_lang: str, use_cuda=False) -> list:
+        model_instance = cls._get_least_loaded_model(use_cuda)
+        try:
+            translator = model_instance["translator"]
+            tokenizer = cls._load_tokenizer(src_lang)
 
-    @classmethod
-    def translate_batch_via_intermediate(cls, texts: list, src_lang: str, tgt_lang: str) -> list:
-        intermediate_lang = "eng_Latn"
-        # 从 src_lang 翻译到中间语言
-        intermediate_texts = cls.translate_batch(texts, src_lang, intermediate_lang)
-        # 从中间语言翻译到 tgt_lang
-        final_texts = cls.translate_batch(intermediate_texts, intermediate_lang, tgt_lang)
-        return final_texts
+            sources = [tokenizer.convert_ids_to_tokens(tokenizer.encode(text)) for text in texts]
+            target_prefix = [tgt_lang] * len(texts)
+            results = translator.translate_batch(sources, target_prefix=[target_prefix])
 
-    @classmethod
-    def translate_batch_with_cuda_via_intermediate(cls, texts: list, src_lang: str, tgt_lang: str) -> list:
-        intermediate_lang = "eng_Latn"
-        # 从 src_lang 翻译到中间语言
-        intermediate_texts = cls.translate_batch_with_cuda(texts, src_lang, intermediate_lang)
-        # 从中间语言翻译到 tgt_lang
-        final_texts = cls.translate_batch_with_cuda(intermediate_texts, intermediate_lang, tgt_lang)
-        return final_texts
+            translations = [tokenizer.decode(tokenizer.convert_tokens_to_ids(result.hypotheses[0][1:])) for result in
+                            results]
+            return translations
+        finally:
+            cls._release_model(model_instance)
 
 
 class DocxTranslator(TranslatorSingleton):
@@ -132,7 +93,7 @@ class DocxTranslator(TranslatorSingleton):
         if not run.text.strip():
             return ""
 
-        translated_text = TranslatorSingleton.translate_sentence_with_cuda(run.text, src_lang, tgt_lang)
+        translated_text = TranslatorSingleton.translate_sentence(run.text, src_lang, tgt_lang, use_cuda=True)
         return translated_text
 
     @staticmethod
@@ -175,7 +136,7 @@ class TableTranslator(TranslatorSingleton):
         if text is None:
             return text
         lines = text.split('\n')
-        translated_lines = [TranslatorSingleton.translate_sentence_with_cuda(line, src_lang, tgt_lang) for line in
+        translated_lines = [TranslatorSingleton.translate_sentence(line, src_lang, tgt_lang, use_cuda=True) for line in
                             lines]
         return '\n'.join(translated_lines)
 
@@ -214,5 +175,6 @@ class TableTranslator(TranslatorSingleton):
     @staticmethod
     def translate_csv(input_path: str, output_path: str, src_lang: str, tgt_lang: str):
         df = pd.read_csv(input_path)
-        translated_df = df.applymap(lambda x: TableTranslator.translate_text(x, src_lang, tgt_lang) if isinstance(x, str) else x)
+        translated_df = df.applymap(
+            lambda x: TableTranslator.translate_text(x, src_lang, tgt_lang) if isinstance(x, str) else x)
         translated_df.to_csv(output_path, index=False)

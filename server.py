@@ -19,24 +19,23 @@ from utils.fileHandler import FileHandler
 from contextlib import asynccontextmanager
 from models.model import *
 from models.translateModel import TranslatorSingleton
-from utils.util import delete_folder_contents, delete_folder
+from utils.util import delete_folder_contents
 from utils.cronjob import scheduler
 
 config = ConfigParser()  # 创建配置解析器对象
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 预加载配置项
     config.read(os.path.abspath("./config/config.ini"))
     # 预加载模型
-    TranslatorSingleton.get_cpu_model()
-    TranslatorSingleton.get_cuda_model()
+    TranslatorSingleton.initialize_models(num_cpu_models=1, num_cuda_models=2)
     # 预加载tokenizer
     TranslatorSingleton._load_tokenizer("khk_Cyrl")
     TranslatorSingleton._load_tokenizer("eng_Latn")
     # 定时任务
-    scheduler.add_job(task_manager.delete_downloaded_task_folders, 'cron', hour=12, minute=7, args=[config['DEFAULT']['DOWNLOAD_DICTIONARY']])
+    scheduler.add_job(task_manager.delete_downloaded_task_folders, 'cron', hour=12, minute=7,
+                      args=[config['DEFAULT']['DOWNLOAD_DICTIONARY']])
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -84,6 +83,8 @@ async def translate_files(request: Request, args: SourceRequest, background_task
     if os.path.exists(output_dictionary):
         delete_folder_contents(output_dictionary)
     try:
+        if task_manager.count_tasks() > int(config['DEFAULT']['MAX_TASKS']):
+            raise HTTPException(status_code=555, detail=f"服务器繁忙请稍后重试")
         task_manager.add_task(client_ip)
         background_tasks.add_task(translate_folder_with_task_id,
                                   task_id=client_ip,
@@ -96,9 +97,12 @@ async def translate_files(request: Request, args: SourceRequest, background_task
     except PackageNotFoundError as ee:
         logger.error(f"{client_ip} translate files failed , {ee}.")
         raise HTTPException(status_code=501, detail=f"File not Found: {str(ee)}")
+    except HTTPException as e:
+        logger.error(f"{client_ip} translate files failed , {e}.")
+        raise e
     except Exception as e:
         logger.error(f"{client_ip} translate files failed , {e}.")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {e.d}")
 
     return JSONResponse(status_code=200, content={"task_id": client_ip})
 
