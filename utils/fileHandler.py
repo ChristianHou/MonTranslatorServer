@@ -4,7 +4,6 @@ from io import BytesIO
 from docx import Document
 from typing import List
 from fastapi import UploadFile, HTTPException
-import comtypes.client
 import pandas as pd
 
 
@@ -19,23 +18,6 @@ class FileHandler:
         finally:
             file_stream.close()
 
-    @classmethod
-    def _convert_and_save_doc(cls, file: UploadFile, directory: str) -> None:
-        temp_dir = os.path.join(directory, 'temp')
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_doc_path = os.path.join(temp_dir, file.filename)
-
-        with open(temp_doc_path, 'wb') as temp_doc_file:
-            temp_doc_file.write(file.file.read())
-
-        word = comtypes.client.CreateObject('Word.Application')
-        doc = word.Documents.Open(temp_doc_path)
-        new_docx_path = os.path.join(directory, file.filename.replace('.doc', '.docx'))
-        doc.SaveAs(new_docx_path, FileFormat=16)  # 16 represents the .docx format
-        doc.Close()
-        word.Quit()
-
-        os.remove(temp_doc_path)
 
     @classmethod
     def _save_excel(cls, file: UploadFile, directory: str) -> None:
@@ -65,14 +47,12 @@ class FileHandler:
         os.makedirs(upload_directory, exist_ok=True)
 
         for file in files:
-            if not file.filename.endswith(('.docx', '.doc', '.xlsx', '.xls', '.csv')):
+            if not file.filename.endswith(('.docx', '.xlsx', '.xls', '.csv')):
                 raise HTTPException(status_code=400, detail=f"Unsupported file type: {file.filename}")
 
             try:
                 if file.filename.endswith('.docx'):
                     cls._save_docx(file, upload_directory)
-                elif file.filename.endswith('.doc'):
-                    cls._convert_and_save_doc(file, upload_directory)
                 elif file.filename.endswith(('.xlsx', '.xls')):
                     cls._save_excel(file, upload_directory)
                 elif file.filename.endswith('.csv'):
