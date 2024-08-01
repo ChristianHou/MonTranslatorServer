@@ -9,3 +9,5 @@ torch==2.1.2+cu121
 tqdm==4.65.0
 transformers==4.38.1
 uvicorn==0.30.4
+docx
+numpy<=2
