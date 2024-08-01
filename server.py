@@ -19,20 +19,27 @@ from utils.fileHandler import FileHandler
 from contextlib import asynccontextmanager
 from models.model import *
 from models.translateModel import TranslatorSingleton
-from utils.util import delete_folder_contents
+from utils.util import delete_folder_contents, delete_folder
+from utils.cronjob import scheduler
 
 config = ConfigParser()  # 创建配置解析器对象
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 预加载配置项
     config.read(os.path.abspath("./config/config.ini"))
+    # 预加载模型
     TranslatorSingleton.get_cpu_model()
     TranslatorSingleton.get_cuda_model()
     # 预加载tokenizer
     TranslatorSingleton._load_tokenizer("khk_Cyrl")
     TranslatorSingleton._load_tokenizer("eng_Latn")
+    # 定时任务
+    scheduler.add_job(task_manager.delete_downloaded_task_folders, 'cron', hour=12, minute=7, args=[config['DEFAULT']['DOWNLOAD_DICTIONARY']])
+    scheduler.start()
     yield
+    scheduler.shutdown()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
@@ -121,8 +128,6 @@ async def websocket_translate(websocket: WebSocket):
 @app.get("/task_status")
 async def get_task_status(task_id: str):
     status = task_manager.get_task_status(task_id)
-    if status == TaskStatus.COMPLETED:
-        task_manager.delete_task_status(task_id)
     if status is None:
         return {"task_id": task_id, "result": "No Task"}
     return {"task_id": task_id, "result": status}
@@ -151,6 +156,7 @@ async def download_all_files(task_id: str):
 
     if zip_path.exists():
         logger.info(f"Successfully downloaded all files from {task_id}")
+        task_manager.update_task_status(task_id, TaskStatus.DOWNLOADED)
         return FileResponse(zip_path, filename="all_files.zip")
     else:
         logger.error(f"Failed to download all files from {task_id}")

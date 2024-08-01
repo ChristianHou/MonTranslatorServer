@@ -43,3 +43,4 @@ def translate_folder_with_task_id(task_id: str, input_folder: str, output_folder
         print(e)
     finally:
         delete_folder_contents(input_folder)
+        os.rmdir(input_folder)
