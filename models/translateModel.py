@@ -23,7 +23,8 @@ class TranslatorSingleton:
         for _ in range(num_cpu_models):
             cls._cpu_instances.append({
                 "translator": ctranslate2.Translator(cfg["MODEL_LIST"][cfg["DEFAULT"]["SEQ_TRANSLATE_MODEL"]],
-                                                     intra_threads=4),
+                                                     inter_threads=4,
+                                                     intra_threads=1),
                 "task_count": threading.Semaphore(10)
             })
         for _ in range(num_cuda_models):
@@ -54,7 +55,13 @@ class TranslatorSingleton:
         model_instance["task_count"].release()
 
     @classmethod
-    def translate_sentence(cls, text: str, src_lang: str, tgt_lang: str, use_cuda=False) -> str:
+    def translate_sentence(cls, text: str, src_lang: str, tgt_lang: str, use_cuda=False, via_eng=False) -> str:
+        if via_eng and src_lang != "eng_Latn" and tgt_lang != "eng_Latn":
+            # First translate to English
+            intermediate_text = cls.translate_sentence(text, src_lang, "eng_Latn", use_cuda)
+            # Then translate from English to target language
+            return cls.translate_sentence(intermediate_text, "eng_Latn", tgt_lang, use_cuda)
+
         model_instance = cls._get_least_loaded_model(use_cuda)
         try:
             translator = model_instance["translator"]
@@ -62,15 +69,27 @@ class TranslatorSingleton:
 
             source = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
             target_prefix = [tgt_lang]
-            results = translator.translate_batch([source], target_prefix=[target_prefix])
-            target = results[0].hypotheses[0][1:]
+            results = translator.translate_iterable([source], target_prefix=[target_prefix], beam_size=1)
 
-            return tokenizer.decode(tokenizer.convert_tokens_to_ids(target))
+            translations = []
+            for result in results:
+                target = result.hypotheses[0][1:]  # Get the first hypothesis, skipping the language tag
+                translation = tokenizer.decode(tokenizer.convert_tokens_to_ids(target))
+                translations.append(translation)
+
+            return translations[0]
+
         finally:
             cls._release_model(model_instance)
 
     @classmethod
-    def translate_batch(cls, texts: list, src_lang: str, tgt_lang: str, use_cuda=False) -> list:
+    def translate_batch(cls, texts: list, src_lang: str, tgt_lang: str, use_cuda=False, via_eng=False) -> list:
+        if via_eng and src_lang != "eng_Latn" and tgt_lang != "eng_Latn":
+            # First translate to English
+            intermediate_texts = cls.translate_batch(texts, src_lang, "eng_Latn", use_cuda)
+            # Then translate from English to target language
+            return cls.translate_batch(intermediate_texts, "eng_Latn", tgt_lang, use_cuda)
+
         model_instance = cls._get_least_loaded_model(use_cuda)
         try:
             translator = model_instance["translator"]
@@ -78,10 +97,14 @@ class TranslatorSingleton:
 
             sources = [tokenizer.convert_ids_to_tokens(tokenizer.encode(text)) for text in texts]
             target_prefix = [tgt_lang] * len(texts)
-            results = translator.translate_batch(sources, target_prefix=[target_prefix])
+            results_generator = translator.translate_iterable(sources, target_prefix=[target_prefix], beam_size=1, max_batch_size=32, asynchronous=True)
 
-            translations = [tokenizer.decode(tokenizer.convert_tokens_to_ids(result.hypotheses[0][1:])) for result in
-                            results]
+            translations = []
+            for result in results_generator:
+                target = result.hypotheses[0][1:]  # Get the first hypothesis, skipping the language tag
+                translation = tokenizer.decode(tokenizer.convert_tokens_to_ids(target))
+                translations.append(translation)
+
             return translations
         finally:
             cls._release_model(model_instance)
@@ -89,19 +112,26 @@ class TranslatorSingleton:
 
 class DocxTranslator(TranslatorSingleton):
     @staticmethod
-    def translate_run(run, src_lang, tgt_lang):
+    def translate_run(run, src_lang, tgt_lang, via_eng=False):
         if not run.text.strip():
             return ""
 
-        translated_text = TranslatorSingleton.translate_sentence(run.text, src_lang, tgt_lang, use_cuda=True)
+        translated_text = TranslatorSingleton.translate_sentence(text=run.text,
+                                                              src_lang=src_lang,
+                                                              tgt_lang=tgt_lang,
+                                                              use_cuda=True,
+                                                              via_eng=via_eng)
         return translated_text
 
     @staticmethod
-    def translate_paragraph(paragraph, src_lang, tgt_lang):
+    def translate_paragraph(paragraph, src_lang, tgt_lang, via_eng=False):
         translated_runs = []
 
         for run in paragraph.runs:
-            translated_text = DocxTranslator.translate_run(run, src_lang, tgt_lang)
+            translated_text = DocxTranslator.translate_run(run=run,
+                                                           src_lang=src_lang,
+                                                           tgt_lang=tgt_lang,
+                                                           via_eng=via_eng)
             translated_runs.append((translated_text, run))
 
         paragraph.clear()
@@ -118,13 +148,16 @@ class DocxTranslator(TranslatorSingleton):
             translated_run.font.highlight_color = original_run.font.highlight_color
 
     @staticmethod
-    def translate_docx(input_path: str, output_path: str, src_lang: str, tgt_lang: str):
+    def translate_docx(input_path: str, output_path: str, src_lang: str, tgt_lang: str, via_eng=False):
         doc = Document(input_path)
         translated_doc = Document()
 
         for para in tqdm(doc.paragraphs, desc=f"Translating {input_path}"):
             if para.text.strip():
-                DocxTranslator.translate_paragraph(para, src_lang, tgt_lang)
+                DocxTranslator.translate_paragraph(paragraph=para,
+                                                   src_lang=src_lang,
+                                                   tgt_lang=tgt_lang,
+                                                   via_eng=via_eng)
                 translated_doc.add_paragraph(para.text)
 
         translated_doc.save(output_path)
@@ -132,16 +165,19 @@ class DocxTranslator(TranslatorSingleton):
 
 class TableTranslator(TranslatorSingleton):
     @staticmethod
-    def translate_text(text, src_lang, tgt_lang):
+    def translate_text(text, src_lang, tgt_lang, via_eng=False):
         if text is None:
             return text
         lines = text.split('\n')
-        translated_lines = [TranslatorSingleton.translate_sentence(line, src_lang, tgt_lang, use_cuda=True) for line in
-                            lines]
+        translated_lines = TranslatorSingleton.translate_batch(texts=lines,
+                                                               src_lang=src_lang,
+                                                               tgt_lang=tgt_lang,
+                                                               use_cuda=True,
+                                                               via_eng=via_eng)
         return '\n'.join(translated_lines)
 
     @staticmethod
-    def translate_excel(input_path: str, output_path: str, src_lang: str, tgt_lang: str):
+    def translate_excel(input_path: str, output_path: str, src_lang: str, tgt_lang: str, via_eng=False):
         wb = load_workbook(input_path)
 
         for sheet in wb.worksheets:
@@ -152,7 +188,10 @@ class TableTranslator(TranslatorSingleton):
                     if cell.value and isinstance(cell.value, str):
                         # Translate the text only if this cell is the first in a merged range or not merged
                         if cell.coordinate not in translated_cells:
-                            translated_text = TableTranslator.translate_text(cell.value, src_lang, tgt_lang)
+                            translated_text = TableTranslator.translate_text(text=cell.value,
+                                                                             src_lang=src_lang,
+                                                                             tgt_lang=tgt_lang,
+                                                                             via_eng=via_eng)
                             translated_cells[cell.coordinate] = translated_text
 
                             # Apply the translation to all cells in the merged range, if any
@@ -173,8 +212,11 @@ class TableTranslator(TranslatorSingleton):
         wb.save(output_path)
 
     @staticmethod
-    def translate_csv(input_path: str, output_path: str, src_lang: str, tgt_lang: str):
+    def translate_csv(input_path: str, output_path: str, src_lang: str, tgt_lang: str, via_eng=False):
         df = pd.read_csv(input_path)
         translated_df = df.applymap(
-            lambda x: TableTranslator.translate_text(x, src_lang, tgt_lang) if isinstance(x, str) else x)
+            lambda x: TableTranslator.translate_text(text=x,
+                                                     src_lang=src_lang,
+                                                     tgt_lang=tgt_lang,
+                                                     via_eng=via_eng) if isinstance(x, str) else x)
         translated_df.to_csv(output_path, index=False)

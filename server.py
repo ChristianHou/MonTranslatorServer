@@ -91,7 +91,8 @@ async def translate_files(request: Request, args: SourceRequest, background_task
                                   input_folder=user_directory,
                                   output_folder=output_dictionary,
                                   src_lang=args.source_lang,
-                                  tgt_lang=args.target_lang
+                                  tgt_lang=args.target_lang,
+                                  via_eng=args.via_eng
                                   )
         logger.info(f"Successfully submit task from {client_ip}.")
     except PackageNotFoundError as ee:
@@ -123,7 +124,7 @@ async def websocket_translate(websocket: WebSocket):
 
         sentences = args.get("sentences")
         result_data = translate_sentences(text=sentences, src_lang=args.get('source_lang'),
-                                          tgt_lang=args.get('target_lang'))
+                                          tgt_lang=args.get('target_lang'), via_eng=args.get('via_eng'))
         # 发送翻译结果给客户端
         await websocket.send_text(json.dumps({"result": result_data, "error": ''}))
 
