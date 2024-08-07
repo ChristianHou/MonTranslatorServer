@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     # 预加载配置项
     config.read(os.path.abspath("./config/config.ini"))
     # 预加载模型
-    TranslatorSingleton.initialize_models(num_cpu_models=1, num_cuda_models=2)
+    TranslatorSingleton.initialize_models(num_cpu_models=1, num_cuda_models=1)
     # 预加载tokenizer
     TranslatorSingleton._load_tokenizer("khk_Cyrl")
     TranslatorSingleton._load_tokenizer("eng_Latn")
