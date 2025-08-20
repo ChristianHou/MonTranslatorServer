@@ -9,12 +9,13 @@ from zipfile import ZipFile
 from configparser import ConfigParser
 from typing import List
 from docx.opc.exceptions import PackageNotFoundError
-from fastapi import FastAPI, WebSocket, File, UploadFile, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from service.translate import translate_sentences, translate_folder_with_task_id
 from utils.taskManager import task_manager, TaskStatus
-from utils.rateLimiter import rate_limiter, ws_rate_limiter
+from utils.rateLimiter import rate_limiter
 from utils.fileHandler import FileHandler
 from contextlib import asynccontextmanager
 from models.model import *
@@ -24,12 +25,13 @@ from utils.cronjob import scheduler
 
 config = ConfigParser()  # 创建配置解析器对象
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 预加载配置项
+    # 预加载配置
     config.read(os.path.abspath("./config/config.ini"))
     # 预加载模型
-    TranslatorSingleton.initialize_models(num_cpu_models=1, num_cuda_models=2)
+    TranslatorSingleton.initialize_models(num_cpu_models=0, num_cuda_models=1)
     # 预加载tokenizer
     TranslatorSingleton._load_tokenizer("khk_Cyrl")
     TranslatorSingleton._load_tokenizer("eng_Latn")
@@ -52,6 +54,30 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有方法
     allow_headers=["*"],  # 允许所有头
 )
+
+# 挂载静态文件服务
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# 根路由 - 提供首页
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    """提供首页HTML文件"""
+    try:
+        with open("templates/index.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read(), status_code=200)
+    except FileNotFoundError:
+        # 如果templates目录下没有文件，尝试根目录的旧文件
+        try:
+            with open("index.html", "r", encoding="utf-8") as f:
+                return HTMLResponse(content=f.read(), status_code=200)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="首页文件未找到")
+
+# Favicon路由（可选）
+@app.get("/favicon.ico")
+async def favicon():
+    """返回favicon，避免404错误"""
+    raise HTTPException(status_code=404, detail="Favicon not found")
 
 
 # 上传文件
@@ -108,25 +134,41 @@ async def translate_files(request: Request, args: SourceRequest, background_task
     return JSONResponse(status_code=200, content={"task_id": client_ip})
 
 
-# websocket接口翻译文本
-@app.websocket("/ws/translate/seq")
-@ws_rate_limiter.limit()
-async def websocket_translate(websocket: WebSocket):
-    await websocket.accept()
-    while True:
-        # 接收客户端消息
-        data = await websocket.receive_text()
-        try:
-            args = json.loads(data)
-        except json.JSONDecodeError:
-            await websocket.send_text(json.dumps({"error": "Invalid JSON format"}))
-            continue
-
-        sentences = args.get("sentences")
-        result_data = translate_sentences(text=sentences, src_lang=args.get('source_lang'),
-                                          tgt_lang=args.get('target_lang'), via_eng=args.get('via_eng'))
-        # 发送翻译结果给客户端
-        await websocket.send_text(json.dumps({"result": result_data, "error": ''}))
+# HTTP接口翻译文本
+@app.post("/translate/text")
+@rate_limiter.limit()
+async def translate_text(request: Request, args: SourceRequest):
+    """文本翻译接口 - 支持实时翻译"""
+    try:
+        if not args.sentences or not args.sentences.strip():
+            raise HTTPException(status_code=400, detail="请输入要翻译的文本")
+        
+        if not args.source_lang or not args.target_lang:
+            raise HTTPException(status_code=400, detail="请指定源语言和目标语言")
+        
+        if args.source_lang == args.target_lang:
+            raise HTTPException(status_code=400, detail="源语言和目标语言不能相同")
+        
+        # 执行翻译
+        result_data = translate_sentences(
+            text=args.sentences, 
+            src_lang=args.source_lang,
+            tgt_lang=args.target_lang, 
+            via_eng=args.via_eng or False
+        )
+        
+        logger.info(f"Text translation completed for {len(args.sentences)} characters")
+        return JSONResponse(
+            status_code=200, 
+            content={"result": result_data, "error": "", "status": "success"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Text translation failed: {str(e)}")
+        return JSONResponse(
+            status_code=500, 
+            content={"result": "", "error": str(e), "status": "error"}
+        )
 
 
 # 获取任务状态的接口
@@ -172,4 +214,13 @@ if __name__ == "__main__":
     import multiprocessing
 
     multiprocessing.freeze_support()
-    uvicorn.run(app="server:app", host="0.0.0.0", port=8000, log_level="info", workers=1)
+    # 设置5分钟超时时间 (300秒)
+    uvicorn.run(
+        app="server:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        log_level="info", 
+        workers=1,
+        timeout_keep_alive=300,  # 5分钟超时
+        timeout_graceful_shutdown=30
+    )

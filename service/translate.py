@@ -14,6 +14,7 @@ def translate_sentences(text: str, src_lang: str, tgt_lang: str, via_eng: bool):
     translated_texts = TranslatorSingleton.translate_batch(texts=texts,
                                                            src_lang=src_lang,
                                                            tgt_lang=tgt_lang,
+                                                           use_cuda=True,
                                                            via_eng=via_eng)
     return '\n'.join(translated_texts)
 

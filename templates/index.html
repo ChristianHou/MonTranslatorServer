@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>蒙古语翻译助手 - MonTranslator</title>
+    
+    <!-- 本地静态资源 -->
+    <link href="/static/libs/bootstrap/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/libs/fontawesome/all.min.css" rel="stylesheet">
+    <link href="/static/css/fonts.css" rel="stylesheet">
+    <link href="/static/css/main.css" rel="stylesheet">
+</head>
+<body>
+    <div class="main-container">
+        <div class="container">
+            <!-- Header -->
+            <div class="header">
+                <h1><i class="fas fa-language"></i> 蒙古语翻译助手</h1>
+                <p>专业的多语言翻译服务，支持西里尔蒙文、中文、英语互译</p>
+                <!-- <div class="feature-badges">
+                    <div class="feature-badge">
+                        <i class="fas fa-bolt"></i>
+                        实时翻译
+                    </div>
+                    <div class="feature-badge">
+                        <i class="fas fa-file-alt"></i>
+                        文档翻译
+                    </div>
+                    <div class="feature-badge">
+                        <i class="fas fa-shield-alt"></i>
+                        安全可靠
+                    </div>
+                </div> -->
+            </div>
+
+            <!-- Main Content -->
+            <div class="main-card">
+                <div class="card-tabs">
+                    <ul class="nav nav-tabs" id="translateTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="text-tab" data-bs-toggle="tab" data-bs-target="#text-translate" type="button" role="tab">
+                                <i class="fas fa-comments"></i>
+                                文本翻译
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="file-tab" data-bs-toggle="tab" data-bs-target="#file-translate" type="button" role="tab">
+                                <i class="fas fa-file-upload"></i>
+                                文档翻译
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="tab-content">
+                    <!-- 文本翻译 -->
+                    <div class="tab-pane fade show active" id="text-translate" role="tabpanel">
+                        <div class="row">
+                            <div class="col-lg-5">
+                                <div class="mb-3">
+                                    <label class="form-label">源语言</label>
+                                    <select class="form-select" id="sourceLang">
+                                        <option value="khk_Cyrl">西里尔蒙文</option>
+                                        <option value="zh_Hans">中文 (简体)</option>
+                                        <option value="eng_Latn">英语</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">输入文本</label>
+                                    <textarea class="form-control translation-textarea" id="sourceText" 
+                                            placeholder="请输入要翻译的文本..."></textarea>
+                                </div>
+                            </div>
+
+                            <div class="col-lg-2 d-flex align-items-center justify-content-center">
+                                <div class="language-swap">
+                                    <div class="swap-btn" id="swapLanguages" title="交换语言">
+                                        <i class="fas fa-exchange-alt"></i>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="col-lg-5">
+                                <div class="mb-3">
+                                    <label class="form-label">目标语言</label>
+                                    <select class="form-select" id="targetLang">
+                                        <option value="zh_Hans">中文 (简体)</option>
+                                        <option value="khk_Cyrl">西里尔蒙文</option>
+                                        <option value="eng_Latn">英语</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">翻译结果</label>
+                                    <textarea class="form-control translation-textarea" id="targetText" 
+                                            placeholder="翻译结果将显示在这里..." readonly></textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="viaEnglish">
+                                    <label class="form-check-label" for="viaEnglish">
+                                        <i class="fas fa-route"></i>
+                                        通过英语中转翻译 (提高某些语言对的翻译质量)
+                                    </label>
+                                </div>
+                                <div class="text-center">
+                                    <button class="btn btn-primary btn-lg" id="translateBtn">
+                                        <i class="fas fa-language"></i>
+                                        开始翻译
+                                    </button>
+                                    <button class="btn btn-secondary ms-2" id="clearBtn">
+                                        <i class="fas fa-eraser"></i>
+                                        清空
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 文档翻译 -->
+                    <div class="tab-pane fade" id="file-translate" role="tabpanel">
+                        <div class="row">
+                            <div class="col-lg-6">
+                                <div class="mb-3">
+                                    <label class="form-label">源语言</label>
+                                    <select class="form-select" id="fileSourceLang">
+                                        <option value="khk_Cyrl">西里尔蒙文</option>
+                                        <option value="zh_Hans">中文 (简体)</option>
+                                        <option value="eng_Latn">英语</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-lg-6">
+                                <div class="mb-3">
+                                    <label class="form-label">目标语言</label>
+                                    <select class="form-select" id="fileTargetLang">
+                                        <option value="zh_Hans">中文 (简体)</option>
+                                        <option value="khk_Cyrl">西里尔蒙文</option>
+                                        <option value="eng_Latn">英语</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">上传文档</label>
+                            <div class="file-upload-area" id="fileUploadArea">
+                                <div class="upload-icon">
+                                    <i class="fas fa-cloud-upload-alt"></i>
+                                </div>
+                                <h5>拖拽文件到此处或点击选择</h5>
+                                <p class="text-muted">支持 Word (.docx)、Excel (.xlsx) 等格式</p>
+                                <input type="file" class="d-none" id="fileInput" multiple accept=".docx,.xlsx,.txt">
+                            </div>
+                            <div id="fileList" class="file-list" style="display: none;">
+                                <h6><i class="fas fa-list"></i> 已选择的文件：</h6>
+                                <div id="selectedFiles"></div>
+                            </div>
+                        </div>
+
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="fileViaEnglish">
+                            <label class="form-check-label" for="fileViaEnglish">
+                                <i class="fas fa-route"></i>
+                                通过英语中转翻译
+                            </label>
+                        </div>
+
+                        <div class="text-center">
+                            <button class="btn btn-primary btn-lg" id="uploadTranslateBtn" disabled>
+                                <i class="fas fa-upload"></i>
+                                上传并翻译
+                            </button>
+                        </div>
+
+                        <!-- 任务状态 -->
+                        <div id="taskStatus" class="status-card" style="display: none;">
+                            <div class="d-flex align-items-center justify-content-between mb-3">
+                                <h5><i class="fas fa-tasks"></i> 翻译任务</h5>
+                                <span id="statusBadge" class="status-badge status-pending">
+                                    <i class="fas fa-clock"></i>
+                                    等待中
+                                </span>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <small class="text-muted">任务ID: <span id="taskId"></span></small>
+                                    <small class="text-muted" id="progressText">0%</small>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                                </div>
+                            </div>
+
+                            <div class="text-center">
+                                <button class="btn btn-secondary" id="checkStatusBtn">
+                                    <i class="fas fa-sync-alt"></i>
+                                    刷新状态
+                                </button>
+                                <a id="downloadBtn" class="btn btn-success ms-2" style="display: none;">
+                                    <i class="fas fa-download"></i>
+                                    下载翻译结果
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="footer">
+                <p>&copy; 2024 蒙古语翻译助手 | 基于 NLLB 模型构建</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 容器 -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- JavaScript -->
+    <script src="/static/libs/bootstrap/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/translator.js"></script>
+</body>
+</html>
