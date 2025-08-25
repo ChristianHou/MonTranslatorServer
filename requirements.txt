@@ -1,13 +1,24 @@
-APScheduler==3.10.4
-ctranslate2==4.3.1
-fastapi==0.111.1
-openpyxl==3.1.5
-pandas==1.3.5
-pydantic==2.8.2
-python_docx==1.1.0
-torch==2.1.2+cu121
-tqdm==4.65.0
-transformers==4.38.1
+fastapi==0.104.1
 uvicorn==0.30.4
 docx
 numpy<2
+
+# GPU相关依赖
+ctranslate2>=3.0.0
+torch>=1.9.0
+torchvision>=0.10.0
+
+# 系统监控
+psutil>=5.8.0
+
+# 文件处理
+pandas>=1.3.0
+openpyxl>=3.0.0
+python-multipart>=0.0.6
+
+# 日志和配置
+python-json-logger>=2.0.0
+configparser>=5.0.0
+
+# 异步支持
+asyncio-throttle>=1.0.0

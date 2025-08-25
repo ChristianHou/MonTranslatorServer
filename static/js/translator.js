@@ -268,9 +268,26 @@ class TranslatorApp {
      * 上传文件并提交翻译任务
      */
     async uploadAndTranslate() {
+        console.log('🚀 开始上传文件并翻译...');
+        
         const files = this.fileInput.files;
         if (files.length === 0) {
             this.showToast('请选择要上传的文件', 'warning');
+            return;
+        }
+
+        console.log('📄 选择的文件数量:', files.length);
+        for (let i = 0; i < files.length; i++) {
+            console.log(`📄 文件 ${i+1}:`, files[i].name, files[i].size, '字节');
+        }
+
+        // 检查语言选择
+        if (!this.fileSourceLang || !this.fileTargetLang) {
+            console.error('❌ 语言选择元素缺失:', {
+                sourceLang: this.fileSourceLang,
+                targetLang: this.fileTargetLang
+            });
+            this.showToast('语言选择元素缺失', 'danger');
             return;
         }
 
@@ -279,48 +296,103 @@ class TranslatorApp {
             return;
         }
 
+        console.log('🌐 语言选择:', {
+            source: this.fileSourceLang.value,
+            target: this.fileTargetLang.value,
+            viaEng: this.fileViaEnglish.checked
+        });
+
+        // 验证文件大小
+        const maxFileSize = 10 * 1024 * 1024; // 10MB
+        for (let file of files) {
+            if (file.size > maxFileSize) {
+                this.showToast(`文件 ${file.name} 过大: ${(file.size / 1024 / 1024).toFixed(2)}MB，最大允许10MB`, 'danger');
+                return;
+            }
+        }
+
         this.setUploadLoading(true);
 
         try {
+            // 显示上传进度
+            this.showUploadProgress('准备上传文件...');
+
             // 上传文件
             const formData = new FormData();
             for (let file of files) {
                 formData.append('files', file);
             }
 
+            console.log('📤 开始上传文件...');
+            this.showUploadProgress('正在上传文件...');
+
             const uploadResponse = await fetch('/uploadfiles', {
                 method: 'POST',
                 body: formData
             });
 
+            console.log('📊 上传响应状态:', uploadResponse.status, uploadResponse.statusText);
+
             if (!uploadResponse.ok) {
-                throw new Error('文件上传失败');
+                const errorData = await uploadResponse.json().catch(() => ({}));
+                const errorMessage = errorData.message || `上传失败 (${uploadResponse.status})`;
+                
+                console.error('❌ 文件上传失败:', errorMessage);
+                
+                if (uploadResponse.status === 413) {
+                    this.showToast(`文件过大: ${errorMessage}`, 'danger');
+                } else {
+                    this.showToast(`文件上传失败: ${errorMessage}`, 'danger');
+                }
+                return;
             }
 
             const uploadData = await uploadResponse.json();
+            console.log('✅ 文件上传成功:', uploadData);
+            
             if (!uploadData.client_id) {
                 throw new Error(uploadData.message || '上传失败');
             }
 
+            this.showUploadProgress('文件上传成功，正在提交翻译任务...');
+
             // 提交翻译任务
+            const taskData = {
+                client_ip: uploadData.client_id,
+                source_lang: this.fileSourceLang.value,
+                target_lang: this.fileTargetLang.value,
+                via_eng: this.fileViaEnglish.checked
+            };
+            
+            console.log('📤 提交翻译任务:', taskData);
+            
             const translateResponse = await fetch('/translate/files', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    client_ip: uploadData.client_id,
-                    source_lang: this.fileSourceLang.value,
-                    target_lang: this.fileTargetLang.value,
-                    via_eng: this.fileViaEnglish.checked
-                })
+                body: JSON.stringify(taskData)
             });
 
+            console.log('📊 翻译任务响应状态:', translateResponse.status, translateResponse.statusText);
+
             if (!translateResponse.ok) {
-                throw new Error('翻译任务提交失败');
+                const errorData = await translateResponse.json().catch(() => ({}));
+                const errorMessage = errorData.message || `翻译任务提交失败 (${translateResponse.status})`;
+                
+                console.error('❌ 翻译任务提交失败:', errorMessage);
+                
+                if (translateResponse.status === 555) {
+                    this.showToast('服务器繁忙，请稍后重试', 'warning');
+                } else {
+                    this.showToast(`翻译任务提交失败: ${errorMessage}`, 'danger');
+                }
+                return;
             }
 
             const translateData = await translateResponse.json();
+            console.log('✅ 翻译任务提交成功:', translateData);
+            
             if (!translateData.task_id) {
                 throw new Error('翻译任务创建失败');
             }
@@ -329,8 +401,10 @@ class TranslatorApp {
             this.currentTaskId = translateData.task_id;
             this.showTaskStatus();
             this.showToast('文件上传成功，翻译任务已开始', 'success');
+            this.hideUploadProgress();
             
         } catch (error) {
+            console.error('❌ 上传或翻译失败:', error);
             this.showToast('操作失败: ' + error.message, 'danger');
         } finally {
             this.setUploadLoading(false);
@@ -439,6 +513,13 @@ class TranslatorApp {
         `;
         this.progressFill.style.width = `${progress}%`;
         this.progressText.textContent = `${progress}%`;
+        
+        // 当进度达到100%时，添加completed类，停止动画
+        if (progress >= 100) {
+            this.progressFill.classList.add('completed');
+        } else {
+            this.progressFill.classList.remove('completed');
+        }
     }
 
     /**
@@ -471,6 +552,45 @@ class TranslatorApp {
         if (this.statusCheckInterval) {
             clearInterval(this.statusCheckInterval);
             this.statusCheckInterval = null;
+        }
+    }
+
+    /**
+     * 显示上传进度
+     * @param {string} message - 进度消息
+     */
+    showUploadProgress(message) {
+        // 创建或更新进度显示
+        let progressDiv = document.getElementById('uploadProgress');
+        if (!progressDiv) {
+            progressDiv = document.createElement('div');
+            progressDiv.id = 'uploadProgress';
+            progressDiv.className = 'upload-progress';
+            progressDiv.innerHTML = `
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill"></div>
+                    </div>
+                    <div class="progress-text">${message}</div>
+                </div>
+            `;
+            
+            // 插入到文件上传区域下方
+            this.fileUploadArea.parentNode.insertBefore(progressDiv, this.fileUploadArea.nextSibling);
+        } else {
+            progressDiv.querySelector('.progress-text').textContent = message;
+        }
+        
+        progressDiv.style.display = 'block';
+    }
+
+    /**
+     * 隐藏上传进度
+     */
+    hideUploadProgress() {
+        const progressDiv = document.getElementById('uploadProgress');
+        if (progressDiv) {
+            progressDiv.style.display = 'none';
         }
     }
 }

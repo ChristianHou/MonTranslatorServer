@@ -213,117 +213,157 @@ body {
     transform: rotate(180deg);
 }
 
-.file-upload-area {
-    border: 2px dashed var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 2rem;
+/* 上传进度条样式 */
+.upload-progress {
+    margin: 20px 0;
+    padding: 15px;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    display: none;
+}
+
+.progress-container {
     text-align: center;
-    background: #fafbfc;
-    transition: all 0.2s ease;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.progress-fill {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, #007bff, #0056b3);
+    border-radius: 4px;
+    animation: progress-animation 2s ease-in-out infinite;
+    transition: background 0.3s ease;
+}
+
+.progress-fill.completed {
+    background: linear-gradient(90deg, #28a745, #20c997);
+    animation: none;
+}
+
+@keyframes progress-animation {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(0%); }
+    100% { transform: translateX(100%); }
+}
+
+.progress-text {
+    color: #495057;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* 文件上传区域改进 */
+.file-upload-area {
+    border: 2px dashed #dee2e6;
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
     cursor: pointer;
+    transition: all 0.3s ease;
+    background: #f8f9fa;
+    position: relative;
 }
 
 .file-upload-area:hover {
-    border-color: var(--primary-color);
-    background: #f0f9ff;
+    border-color: #007bff;
+    background: #e3f2fd;
 }
 
 .file-upload-area.dragover {
-    border-color: var(--primary-color);
-    background: #f0f9ff;
+    border-color: #28a745;
+    background: #d4edda;
+    transform: scale(1.02);
 }
 
-.upload-icon {
-    font-size: 2rem;
-    color: var(--text-secondary);
-    margin-bottom: 1rem;
+.file-upload-area .upload-icon {
+    font-size: 48px;
+    color: #6c757d;
+    margin-bottom: 15px;
 }
 
+.file-upload-area .upload-text {
+    color: #495057;
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+
+.file-upload-area .upload-hint {
+    color: #6c757d;
+    font-size: 14px;
+}
+
+/* 文件列表样式改进 */
 .file-list {
-    margin-top: 1rem;
-    padding: 1rem;
-    background: var(--card-background);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border-color);
+    margin-top: 20px;
+    display: none;
 }
 
 .file-item {
     display: flex;
     align-items: center;
-    justify-content: between;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--border-color);
+    padding: 12px 15px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    transition: all 0.2s ease;
 }
 
-.file-item:last-child {
-    border-bottom: none;
+.file-item:hover {
+    border-color: #007bff;
+    box-shadow: 0 2px 4px rgba(0,123,255,0.1);
 }
 
-.status-card {
-    background: var(--card-background);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 1.5rem;
-    margin-top: 1.5rem;
+.file-item .file-icon {
+    color: #007bff;
+    margin-right: 10px;
+    font-size: 18px;
 }
 
-.status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    border-radius: var(--radius-md);
-    font-size: 0.875rem;
+.file-item .file-info {
+    flex-grow: 1;
+}
+
+.file-item .file-name {
     font-weight: 500;
+    color: #495057;
+    margin-bottom: 2px;
 }
 
-.status-pending {
-    background: #fef3c7;
-    color: #92400e;
+.file-item .file-size {
+    color: #6c757d;
+    font-size: 12px;
 }
 
-.status-processing {
-    background: #dbeafe;
-    color: #1e40af;
-}
-
-.status-completed {
-    background: #d1fae5;
-    color: #065f46;
-}
-
-.status-error {
-    background: #fee2e2;
-    color: #991b1b;
-}
-
-.progress-bar {
-    height: 6px;
-    background: var(--border-color);
-    border-radius: 3px;
-    overflow: hidden;
-    margin: 1rem 0;
-}
-
-.progress-fill {
-    height: 100%;
-    background: var(--primary-color);
-    transition: width 0.3s ease;
+/* 按钮状态改进 */
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
 .loading-spinner {
     display: inline-block;
     width: 16px;
     height: 16px;
-    border: 2px solid #f3f3f3;
-    border-top: 2px solid var(--primary-color);
+    border: 2px solid #ffffff;
     border-radius: 50%;
-    animation: spin 1s linear infinite;
+    border-top-color: transparent;
+    animation: spin 1s ease-in-out infinite;
+    margin-right: 8px;
 }
 
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+    to { transform: rotate(360deg); }
 }
 
 .toast-container {
