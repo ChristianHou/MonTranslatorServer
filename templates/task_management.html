@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务管理系统 - 蒙语翻译服务器</title>
+    <link href="/static/libs/bootstrap/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/libs/fontawesome/all.min.css" rel="stylesheet">
+    <link href="/static/css/main.css" rel="stylesheet">
+    <style>
+        .task-card {
+            transition: all 0.3s ease;
+            border-left: 4px solid #dee2e6;
+        }
+        .task-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .task-card.pending { border-left-color: #ffc107; }
+        .task-card.processing { border-left-color: #007bff; }
+        .task-card.completed { border-left-color: #28a745; }
+        .task-card.failed { border-left-color: #dc3545; }
+        .task-card.cancelled { border-left-color: #6c757d; }
+        .task-card.timeout { border-left-color: #fd7e14; }
+        
+        .status-badge {
+            font-size: 0.8em;
+            padding: 0.25em 0.6em;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            border-radius: 4px;
+        }
+        
+        .metrics-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px;
+        }
+        
+        .queue-status {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            border-radius: 15px;
+        }
+        
+        .refresh-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- 页面标题 -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <h1 class="text-center mb-4">
+                    <i class="fas fa-tasks text-primary"></i>
+                    任务管理系统
+                </h1>
+            </div>
+        </div>
+
+        <!-- 统计指标 -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card metrics-card">
+                    <div class="card-body text-center">
+                        <h3 id="total-tasks">-</h3>
+                        <p class="mb-0">总任务数</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metrics-card">
+                    <div class="card-body text-center">
+                        <h3 id="pending-tasks">-</h3>
+                        <p class="mb-0">等待中</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metrics-card">
+                    <div class="card-body text-center">
+                        <h3 id="processing-tasks">-</h3>
+                        <p class="mb-0">处理中</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metrics-card">
+                    <div class="card-body text-center">
+                        <h3 id="success-rate">-</h3>
+                        <p class="mb-0">成功率</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 队列状态 -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card queue-status">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <i class="fas fa-stream"></i> 任务队列状态
+                        </h5>
+                        <div class="row">
+                            <div class="col-md-3">
+                                <strong>队列状态:</strong> <span id="queue-status">-</span>
+                            </div>
+                            <div class="col-md-3">
+                                <strong>等待任务:</strong> <span id="waiting-tasks">-</span>
+                            </div>
+                            <div class="col-md-3">
+                                <strong>处理中任务:</strong> <span id="processing-queue-tasks">-</span>
+                            </div>
+                            <div class="col-md-3">
+                                <strong>可用GPU:</strong> <span id="available-gpus">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 筛选和搜索 -->
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <div class="input-group">
+                    <select class="form-select" id="status-filter">
+                        <option value="">所有状态</option>
+                        <option value="pending">等待中</option>
+                        <option value="processing">处理中</option>
+                        <option value="completed">已完成</option>
+                        <option value="failed">失败</option>
+                        <option value="cancelled">已取消</option>
+                        <option value="timeout">超时</option>
+                    </select>
+                    <button class="btn btn-outline-secondary" type="button" onclick="filterTasks()">
+                        <i class="fas fa-filter"></i> 筛选
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="search-input" placeholder="搜索任务ID或客户端IP...">
+                    <button class="btn btn-outline-secondary" type="button" onclick="searchTasks()">
+                        <i class="fas fa-search"></i> 搜索
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 任务列表 -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="fas fa-list"></i> 任务列表
+                        </h5>
+                        <button class="btn btn-sm btn-outline-primary" onclick="refreshData()">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="tasks-container">
+                            <div class="text-center py-4">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">加载中...</span>
+                                </div>
+                                <p class="mt-2">正在加载任务数据...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 任务详情模态框 -->
+    <div class="modal fade" id="taskDetailModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">任务详情</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="task-detail-content">
+                    <!-- 任务详情内容 -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-warning" id="cancel-task-btn" style="display: none;">
+                        <i class="fas fa-times"></i> 取消任务
+                    </button>
+                    <button type="button" class="btn btn-info" id="retry-task-btn" style="display: none;">
+                        <i class="fas fa-redo"></i> 重试任务
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 刷新按钮 -->
+    <button class="btn btn-primary btn-lg refresh-btn" onclick="refreshData()" title="刷新数据">
+        <i class="fas fa-sync-alt"></i>
+    </button>
+
+    <script src="/static/libs/bootstrap/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentTasks = [];
+        let currentTaskId = null;
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshData();
+            // 每30秒自动刷新一次
+            setInterval(refreshData, 30000);
+        });
+
+        // 刷新所有数据
+        async function refreshData() {
+            try {
+                await Promise.all([
+                    loadTaskMetrics(),
+                    loadQueueStatus(),
+                    loadTasks()
+                ]);
+            } catch (error) {
+                console.error('刷新数据失败:', error);
+                showAlert('刷新数据失败: ' + error.message, 'danger');
+            }
+        }
+
+        // 加载任务统计指标
+        async function loadTaskMetrics() {
+            try {
+                const response = await fetch('/task_metrics');
+                const data = await response.json();
+                
+                document.getElementById('total-tasks').textContent = data.total_tasks || 0;
+                document.getElementById('pending-tasks').textContent = data.pending_tasks || 0;
+                document.getElementById('processing-tasks').textContent = data.processing_tasks || 0;
+                document.getElementById('success-rate').textContent = (data.success_rate || 0) + '%';
+                
+            } catch (error) {
+                console.error('加载任务指标失败:', error);
+            }
+        }
+
+        // 加载队列状态
+        async function loadQueueStatus() {
+            try {
+                const response = await fetch('/queue_status');
+                const data = await response.json();
+                
+                document.getElementById('queue-status').textContent = data.queue_status || 'unknown';
+                document.getElementById('waiting-tasks').textContent = data.queue_stats?.waiting_tasks || 0;
+                document.getElementById('processing-queue-tasks').textContent = data.queue_stats?.processing_tasks || 0;
+                document.getElementById('available-gpus').textContent = data.gpu_stats?.available_gpus || 0;
+                
+            } catch (error) {
+                console.error('加载队列状态失败:', error);
+            }
+        }
+
+        // 加载任务列表
+        async function loadTasks(statusFilter = '') {
+            try {
+                const url = statusFilter ? `/tasks?status=${statusFilter}` : '/tasks';
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                currentTasks = data.tasks || [];
+                renderTasks(currentTasks);
+                
+            } catch (error) {
+                console.error('加载任务列表失败:', error);
+                showAlert('加载任务列表失败: ' + error.message, 'danger');
+            }
+        }
+
+        // 渲染任务列表
+        function renderTasks(tasks) {
+            const container = document.getElementById('tasks-container');
+            
+            if (tasks.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-4">
+                        <i class="fas fa-inbox fa-3x text-muted"></i>
+                        <p class="mt-2 text-muted">暂无任务数据</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = tasks.map(task => createTaskCard(task)).join('');
+        }
+
+        // 创建任务卡片
+        function createTaskCard(task) {
+            const statusClass = `task-card ${task.status}`;
+            const statusText = getStatusText(task.status);
+            const statusBadgeClass = getStatusBadgeClass(task.status);
+            
+            const createdAt = new Date(task.created_at).toLocaleString('zh-CN');
+            const startedAt = task.started_at ? new Date(task.started_at).toLocaleString('zh-CN') : '-';
+            const completedAt = task.completed_at ? new Date(task.completed_at).toLocaleString('zh-CN') : '-';
+            
+            return `
+                <div class="card ${statusClass} mb-3">
+                    <div class="card-body">
+                        <div class="row align-items-center">
+                            <div class="col-md-2">
+                                <h6 class="card-title mb-1">任务ID</h6>
+                                <small class="text-muted">${task.task_id.substring(0, 8)}...</small>
+                            </div>
+                            <div class="col-md-2">
+                                <h6 class="card-title mb-1">状态</h6>
+                                <span class="badge ${statusBadgeClass} status-badge">${statusText}</span>
+                            </div>
+                            <div class="col-md-2">
+                                <h6 class="card-title mb-1">进度</h6>
+                                <div class="progress progress-bar">
+                                    <div class="progress-bar" role="progressbar" 
+                                         style="width: ${task.progress || 0}%" 
+                                         aria-valuenow="${task.progress || 0}" 
+                                         aria-valuemin="0" aria-valuemax="100">
+                                    </div>
+                                </div>
+                                <small class="text-muted">${task.progress || 0}%</small>
+                            </div>
+                            <div class="col-md-2">
+                                <h6 class="card-title mb-1">客户端</h6>
+                                <small class="text-muted">${task.client_ip ? task.client_ip.substring(0, 8) + '...' : '-'}</small>
+                            </div>
+                            <div class="col-md-2">
+                                <h6 class="card-title mb-1">创建时间</h6>
+                                <small class="text-muted">${createdAt}</small>
+                            </div>
+                            <div class="col-md-2">
+                                <button class="btn btn-sm btn-outline-primary" onclick="showTaskDetail('${task.task_id}')">
+                                    <i class="fas fa-eye"></i> 详情
+                                </button>
+                            </div>
+                        </div>
+                        
+                        ${task.error_message ? `
+                            <div class="row mt-2">
+                                <div class="col-12">
+                                    <div class="alert alert-danger alert-sm mb-0">
+                                        <i class="fas fa-exclamation-triangle"></i>
+                                        <strong>错误信息:</strong> ${task.error_message}
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        // 获取状态文本
+        function getStatusText(status) {
+            const statusMap = {
+                'pending': '等待中',
+                'processing': '处理中',
+                'completed': '已完成',
+                'failed': '失败',
+                'cancelled': '已取消',
+                'timeout': '超时'
+            };
+            return statusMap[status] || status;
+        }
+
+        // 获取状态徽章样式
+        function getStatusBadgeClass(status) {
+            const badgeMap = {
+                'pending': 'bg-warning',
+                'processing': 'bg-primary',
+                'completed': 'bg-success',
+                'failed': 'bg-danger',
+                'cancelled': 'bg-secondary',
+                'timeout': 'bg-warning'
+            };
+            return badgeMap[status] || 'bg-secondary';
+        }
+
+        // 显示任务详情
+        async function showTaskDetail(taskId) {
+            try {
+                const response = await fetch(`/task_status?task_id=${taskId}`);
+                const task = await response.json();
+                
+                if (task.result === 'No Task') {
+                    showAlert('任务不存在', 'warning');
+                    return;
+                }
+                
+                currentTaskId = taskId;
+                const modal = new bootstrap.Modal(document.getElementById('taskDetailModal'));
+                
+                // 填充任务详情
+                document.getElementById('task-detail-content').innerHTML = createTaskDetailHTML(task);
+                
+                // 显示/隐藏操作按钮
+                const cancelBtn = document.getElementById('cancel-task-btn');
+                const retryBtn = document.getElementById('retry-task-btn');
+                
+                cancelBtn.style.display = task.status === 'pending' || task.status === 'processing' ? 'inline-block' : 'none';
+                retryBtn.style.display = task.status === 'failed' ? 'inline-block' : 'none';
+                
+                modal.show();
+                
+            } catch (error) {
+                console.error('获取任务详情失败:', error);
+                showAlert('获取任务详情失败: ' + error.message, 'danger');
+            }
+        }
+
+        // 创建任务详情HTML
+        function createTaskDetailHTML(task) {
+            return `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>基本信息</h6>
+                        <table class="table table-sm">
+                            <tr><td>任务ID:</td><td>${task.task_id}</td></tr>
+                            <tr><td>状态:</td><td><span class="badge ${getStatusBadgeClass(task.status)}">${getStatusText(task.status)}</span></td></tr>
+                            <tr><td>进度:</td><td>${task.progress || 0}%</td></tr>
+                            <tr><td>创建时间:</td><td>${task.created_at ? new Date(task.created_at).toLocaleString('zh-CN') : '-'}</td></tr>
+                            <tr><td>开始时间:</td><td>${task.started_at ? new Date(task.started_at).toLocaleString('zh-CN') : '-'}</td></tr>
+                            <tr><td>完成时间:</td><td>${task.completed_at ? new Date(task.completed_at).toLocaleString('zh-CN') : '-'}</td></tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>翻译信息</h6>
+                        <table class="table table-sm">
+                            <tr><td>客户端IP:</td><td>${task.client_ip || '-'}</td></tr>
+                            <tr><td>源语言:</td><td>${task.source_lang || '-'}</td></tr>
+                            <tr><td>目标语言:</td><td>${task.target_lang || '-'}</td></tr>
+                            <tr><td>通过英语:</td><td>${task.via_eng ? '是' : '否'}</td></tr>
+                            <tr><td>文件数量:</td><td>${task.file_count || 0}</td></tr>
+                            <tr><td>总文件大小:</td><td>${formatFileSize(task.total_file_size || 0)}</td></tr>
+                        </table>
+                    </div>
+                </div>
+                ${task.error_message ? `
+                    <div class="row mt-3">
+                        <div class="col-12">
+                            <div class="alert alert-danger">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <strong>错误信息:</strong> ${task.error_message}
+                            </div>
+                        </div>
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // 筛选任务
+        function filterTasks() {
+            const statusFilter = document.getElementById('status-filter').value;
+            loadTasks(statusFilter);
+        }
+
+        // 搜索任务
+        function searchTasks() {
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            if (!searchTerm) {
+                renderTasks(currentTasks);
+                return;
+            }
+            
+            const filteredTasks = currentTasks.filter(task => 
+                task.task_id.toLowerCase().includes(searchTerm) ||
+                (task.client_ip && task.client_ip.toLowerCase().includes(searchTerm))
+            );
+            
+            renderTasks(filteredTasks);
+        }
+
+        // 取消任务
+        async function cancelTask() {
+            if (!currentTaskId) return;
+            
+            try {
+                const response = await fetch(`/tasks/${currentTaskId}/cancel`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ reason: '用户取消' })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showAlert('任务取消成功', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('taskDetailModal')).hide();
+                    refreshData();
+                } else {
+                    showAlert('任务取消失败: ' + result.detail, 'danger');
+                }
+                
+            } catch (error) {
+                console.error('取消任务失败:', error);
+                showAlert('取消任务失败: ' + error.message, 'danger');
+            }
+        }
+
+        // 重试任务
+        async function retryTask() {
+            if (!currentTaskId) return;
+            
+            try {
+                const response = await fetch(`/tasks/${currentTaskId}/retry`, {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showAlert('任务重试成功', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('taskDetailModal')).hide();
+                    refreshData();
+                } else {
+                    showAlert('任务重试失败: ' + result.detail, 'danger');
+                }
+                
+            } catch (error) {
+                console.error('重试任务失败:', error);
+                showAlert('重试任务失败: ' + error.message, 'danger');
+            }
+        }
+
+        // 绑定按钮事件
+        document.getElementById('cancel-task-btn').addEventListener('click', cancelTask);
+        document.getElementById('retry-task-btn').addEventListener('click', retryTask);
+
+        // 显示提示信息
+        function showAlert(message, type = 'info') {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            document.querySelector('.container-fluid').insertBefore(alertDiv, document.querySelector('.row'));
+            
+            // 5秒后自动消失
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+    </script>
+</body>
+</html>

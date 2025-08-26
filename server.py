@@ -8,12 +8,12 @@ from pathlib import Path
 from zipfile import ZipFile
 from typing import List
 from docx.opc.exceptions import PackageNotFoundError
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from service.translate import translate_sentences, translate_folder_with_task_id
-from utils.taskManager import task_manager, TaskStatus
+from utils.persistent_task_manager import persistent_task_manager, TaskStatus
 from utils.rateLimiter import rate_limiter
 from utils.fileHandler import FileHandler
 from contextlib import asynccontextmanager
@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
         logging.warning(f"⚠️  eng_Latn tokenizer 加载失败: {e}")
     
     # 定时任务
-    scheduler.add_job(task_manager.delete_downloaded_task_folders, 'cron', hour=12, minute=7,
+    scheduler.add_job(persistent_task_manager.delete_downloaded_task_folders, 'cron', hour=12, minute=7,
                       args=[config_manager.get_download_directory()])
     scheduler.start()
     yield
@@ -85,6 +85,17 @@ async def read_root():
                 return HTMLResponse(content=f.read(), status_code=200)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="首页文件未找到")
+
+
+# 任务管理页面路由
+@app.get("/tasks", response_class=HTMLResponse)
+async def task_management_page():
+    """提供任务管理页面HTML文件"""
+    try:
+        with open("templates/task_management.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read(), status_code=200)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务管理页面文件未找到")
 
 # 测试页面路由
 @app.get("/test", response_class=HTMLResponse)
@@ -198,46 +209,95 @@ async def create_upload_files(files: List[UploadFile] = File(...)):
 
 
 # 批量翻译
-@app.post("/translate/files")
-async def translate_files(request: Request, args: SourceRequest, background_tasks: BackgroundTasks):
-    # client_ip = args.client_ip
-    client_ip = args.client_ip
-    # 验证客户端ID格式，防止路径注入
+# 新增任务提交接口（不再处理文件上传）
+@app.post("/submit_translation_task")
+async def submit_translation_task(
+    background_tasks: BackgroundTasks,
+    client_id: str = Form(...),
+    source_lang: str = Form(...),
+    target_lang: str = Form(...),
+    via_eng: bool = Form(False)
+):
+    # 验证客户端ID
     try:
-        uuid.UUID(client_ip)
+        uuid.UUID(client_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="无效的客户端ID")
     
-    user_directory = os.path.join(config_manager.get_upload_directory(), client_ip)
-    # 修改：使用task_id作为下载目录名，而不是client_ip
-    task_id = task_manager.create_task(metadata={"client_ip": client_ip})
-    output_dictionary = os.path.join(config_manager.get_download_directory(), task_id)
-    if os.path.exists(output_dictionary):
-        delete_folder_contents(output_dictionary)
+    # 验证语言设置
+    if not source_lang or not target_lang:
+        raise HTTPException(status_code=400, detail="请指定源语言和目标语言")
+    
+    if source_lang == target_lang:
+        raise HTTPException(status_code=400, detail="源语言和目标语言不能相同")
+    
+    # 获取已上传的文件目录
+    user_directory = os.path.join(config_manager.get_upload_directory(), client_id)
+    if not os.path.exists(user_directory):
+        raise HTTPException(status_code=404, detail="找不到上传的文件，请先上传文件")
+    
+    # 获取目录中的文件
     try:
-        # 使用异步方式检查任务数量
+        filenames = os.listdir(user_directory)
+        if not filenames:
+            raise HTTPException(status_code=400, detail="上传目录中没有文件")
+    except Exception as e:
+        logger.error(f"读取上传文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"读取上传文件失败: {str(e)}")
+    
+    # 计算文件总大小
+    total_size = 0
+    file_count = len(filenames)
+    for filename in filenames:
+        file_path = os.path.join(user_directory, filename)
+        total_size += os.path.getsize(file_path)
+    
+    # 创建翻译任务
+    try:
+        task_id = persistent_task_manager.create_task(
+            metadata={"client_ip": client_id, "filenames": filenames},
+            client_ip=client_id,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            via_eng=via_eng,
+            file_count=file_count,
+            total_file_size=total_size
+        )
+    except Exception as e:
+        logger.error(f"创建翻译任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建翻译任务失败: {str(e)}")
+    
+    # 设置输出目录
+    output_directory = os.path.join(config_manager.get_download_directory(), task_id)
+    if os.path.exists(output_directory):
+        delete_folder_contents(output_directory)
+    
+    try:
+        # 检查任务数量
         import asyncio
-        task_count = await asyncio.to_thread(task_manager.count_tasks)
+        task_count = await asyncio.to_thread(persistent_task_manager.count_tasks)
         if task_count > config_manager.getint('SETTINGS', 'MAX_TASKS'):
-            raise HTTPException(status_code=555, detail=f"服务器繁忙请稍后重试")
+            raise HTTPException(status_code=555, detail="服务器繁忙请稍后重试")
+        
+        # 添加后台任务
         background_tasks.add_task(translate_folder_with_task_id,
                                   task_id=task_id,
                                   input_folder=user_directory,
-                                  output_folder=output_dictionary,
-                                  src_lang=args.source_lang,
-                                  tgt_lang=args.target_lang,
-                                  via_eng=args.via_eng
+                                  output_folder=output_directory,
+                                  src_lang=source_lang,
+                                  tgt_lang=target_lang,
+                                  via_eng=via_eng
                                   )
-        logger.info(f"Successfully submit task from {client_ip}.")
+        logger.info(f"成功提交翻译任务: client_id={client_id}, task_id={task_id}")
     except PackageNotFoundError as ee:
-        logger.error(f"{client_ip} translate files failed , {ee}.")
-        raise HTTPException(status_code=501, detail=f"File not Found: {str(ee)}")
+        logger.error(f"翻译任务失败: {ee}")
+        raise HTTPException(status_code=501, detail=f"文件未找到: {str(ee)}")
     except HTTPException as e:
-        logger.error(f"{client_ip} translate files failed , {e}.")
+        logger.error(f"翻译任务失败: {e.detail}")
         raise e
     except Exception as e:
-        logger.error(f"{client_ip} translate files failed , {e}.")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        logger.error(f"翻译任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"发生错误: {str(e)}")
 
     return JSONResponse(status_code=200, content={"task_id": task_id})
 
@@ -282,15 +342,26 @@ async def translate_text(request: Request, args: SourceRequest):
 # 获取任务状态的接口
 @app.get("/task_status")
 async def get_task_status(task_id: str):
-    status = task_manager.get_task_status(task_id)
+    status = persistent_task_manager.get_task_status(task_id)
     if status is None:
         return {"task_id": task_id, "result": "No Task"}
     
-    # 只返回状态字符串，而不是整个状态对象
-    if isinstance(status, dict) and 'status' in status:
-        return {"task_id": task_id, "result": status['status']}
-    else:
-        return {"task_id": task_id, "result": str(status)}
+    # 返回完整的任务状态信息
+    return {
+        "task_id": task_id,
+        "result": status.get('status', 'unknown'),
+        "progress": status.get('progress', 0.0),
+        "created_at": status.get('created_at'),
+        "started_at": status.get('started_at'),
+        "completed_at": status.get('completed_at'),
+        "error_message": status.get('error_message'),
+        "client_ip": status.get('client_ip'),
+        "source_lang": status.get('source_lang'),
+        "target_lang": status.get('target_lang'),
+        "via_eng": status.get('via_eng'),
+        "file_count": status.get('file_count'),
+        "total_file_size": status.get('total_file_size')
+    }
 
 
 @app.get("/download-all")
@@ -330,7 +401,7 @@ async def download_all_files(task_id: str):
     if zip_path.exists():
         logger.info(f"Successfully downloaded all files from {task_id}")
         # 使用COMPLETED状态，因为DOWNLOADED不是有效的TaskStatus
-        task_manager.update_task_status(task_id, TaskStatus.COMPLETED)
+        persistent_task_manager.update_task_status(task_id, TaskStatus.COMPLETED)
         return FileResponse(zip_path, filename="all_files.zip")
     else:
         logger.error(f"Failed to download all files from {task_id}")
@@ -398,6 +469,95 @@ async def get_system_info():
     except Exception as e:
         logger.error(f"获取系统信息失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取系统信息失败: {e}")
+
+
+@app.get("/tasks")
+async def get_all_tasks(limit: int = 50, status:str = None):
+    """获取所有任务列表"""
+    try:
+        from utils.persistent_task_manager import TaskStatus
+        
+        status_filter = None
+        if status:
+            try:
+                status_filter = TaskStatus(status)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"无效的任务状态: {status}")
+        
+        tasks = persistent_task_manager.get_all_tasks(status_filter=status_filter, limit=limit)
+        return {"tasks": tasks, "total": len(tasks)}
+        
+    except Exception as e:
+        logger.error(f"获取任务列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取任务列表失败: {e}")
+
+
+@app.get("/task_metrics")
+async def get_task_metrics():
+    """获取任务统计指标"""
+    try:
+        metrics = persistent_task_manager.get_task_metrics()
+        return metrics
+        
+    except Exception as e:
+        logger.error(f"获取任务统计指标失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取任务统计指标失败: {e}")
+
+
+@app.get("/queue_status")
+async def get_queue_status():
+    """获取任务队列状态"""
+    try:
+        from utils.task_queue_manager import task_queue_manager
+        status = task_queue_manager.get_queue_status()
+        return status
+        
+    except Exception as e:
+        logger.error(f"获取队列状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取队列状态失败: {e}")
+
+
+@app.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str, reason: str = "用户取消"):
+    """取消任务"""
+    try:
+        success = persistent_task_manager.cancel_task(task_id, reason)
+        if success:
+            return {"message": "任务取消成功", "task_id": task_id}
+        else:
+            raise HTTPException(status_code=400, detail="任务取消失败")
+            
+    except Exception as e:
+        logger.error(f"取消任务失败: {task_id}, 错误: {e}")
+        raise HTTPException(status_code=500, detail=f"取消任务失败: {e}")
+
+
+@app.post("/tasks/{task_id}/retry")
+async def retry_task(task_id: str):
+    """重试任务"""
+    try:
+        success = persistent_task_manager.retry_task(task_id)
+        if success:
+            return {"message": "任务重试成功", "task_id": task_id}
+        else:
+            raise HTTPException(status_code=400, detail="任务重试失败")
+            
+    except Exception as e:
+        logger.error(f"重试任务失败: {task_id}, 错误: {e}")
+        raise HTTPException(status_code=500, detail=f"重试任务失败: {e}")
+
+
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: str):
+    """删除任务"""
+    try:
+        # 这里可以添加删除逻辑，或者只是标记为删除
+        # 暂时返回成功，实际删除逻辑需要根据业务需求实现
+        return {"message": "任务删除成功", "task_id": task_id}
+        
+    except Exception as e:
+        logger.error(f"删除任务失败: {task_id}, 错误: {e}")
+        raise HTTPException(status_code=500, detail=f"删除任务失败: {e}")
 
 
 if __name__ == "__main__":

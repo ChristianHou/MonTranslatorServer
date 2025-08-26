@@ -1,6 +1,6 @@
 import os
 from utils.util import delete_folder_contents
-from utils.taskManager import update_task_status
+from utils.persistent_task_manager import persistent_task_manager, TaskStatus
 from models.translateModel import TranslatorSingleton, DocxTranslator, TableTranslator
 
 
@@ -67,24 +67,35 @@ def translate_folder(input_folder: str, output_folder: str, src_lang: str, tgt_l
 
 
 # 带有task_id的翻译文件夹函数
-@update_task_status  # 动态传递task_id给装饰器
 def translate_folder_with_task_id(task_id: str, input_folder: str, output_folder: str, src_lang: str, tgt_lang: str,
                                   via_eng: bool = False):
     success = False
     try:
+        # 更新任务状态为处理中
+        persistent_task_manager.update_task_status(task_id, TaskStatus.PROCESSING, progress=25)
+        
         translate_folder(input_folder=input_folder,
                          output_folder=output_folder,
                          src_lang=src_lang,
                          tgt_lang=tgt_lang,
                          via_eng=via_eng)
+        
+        # 更新任务状态为已完成
+        persistent_task_manager.update_task_status(task_id, TaskStatus.COMPLETED, progress=100)
         success = True
+        
     except Exception as e:
         # 记录详细错误信息
         import traceback
         error_details = traceback.format_exc()
         print(f"Translation failed for task {task_id}: {error_details}")
-        # 重新抛出异常，让装饰器处理状态更新
+        
+        # 更新任务状态为失败
+        persistent_task_manager.update_task_status(task_id, TaskStatus.FAILED, error_message=str(e))
+        
+        # 重新抛出异常
         raise e
+        
     finally:
         # 只有在成功时才删除输入文件夹，失败时保留以便调试和重试
         if success:

@@ -275,12 +275,12 @@ class TranslatorApp {
             this.showToast('请选择要上传的文件', 'warning');
             return;
         }
-
+    
         console.log('📄 选择的文件数量:', files.length);
         for (let i = 0; i < files.length; i++) {
             console.log(`📄 文件 ${i+1}:`, files[i].name, files[i].size, '字节');
         }
-
+    
         // 检查语言选择
         if (!this.fileSourceLang || !this.fileTargetLang) {
             console.error('❌ 语言选择元素缺失:', {
@@ -290,18 +290,18 @@ class TranslatorApp {
             this.showToast('语言选择元素缺失', 'danger');
             return;
         }
-
+    
         if (this.fileSourceLang.value === this.fileTargetLang.value) {
             this.showToast('源语言和目标语言不能相同', 'warning');
             return;
         }
-
+    
         console.log('🌐 语言选择:', {
             source: this.fileSourceLang.value,
             target: this.fileTargetLang.value,
             viaEng: this.fileViaEnglish.checked
         });
-
+    
         // 验证文件大小
         const maxFileSize = 10 * 1024 * 1024; // 10MB
         for (let file of files) {
@@ -310,104 +310,89 @@ class TranslatorApp {
                 return;
             }
         }
-
+    
         this.setUploadLoading(true);
-
+    
         try {
-            // 显示上传进度
-            this.showUploadProgress('准备上传文件...');
-
-            // 上传文件
-            const formData = new FormData();
-            for (let file of files) {
-                formData.append('files', file);
-            }
-
-            console.log('📤 开始上传文件...');
+            // === 第一步：上传文件 ===
             this.showUploadProgress('正在上传文件...');
-
+            
+            const uploadFormData = new FormData();
+            for (let file of files) {
+                const safeFileName = encodeURIComponent(file.name);
+                uploadFormData.append('files', file, safeFileName);
+            }
+    
+            // 上传文件请求
             const uploadResponse = await fetch('/uploadfiles', {
                 method: 'POST',
-                body: formData
+                body: uploadFormData,
+                headers: { 'Accept': 'application/json' }
             });
-
-            console.log('📊 上传响应状态:', uploadResponse.status, uploadResponse.statusText);
-
+    
             if (!uploadResponse.ok) {
                 const errorData = await uploadResponse.json().catch(() => ({}));
-                const errorMessage = errorData.message || `上传失败 (${uploadResponse.status})`;
-                
-                console.error('❌ 文件上传失败:', errorMessage);
-                
-                if (uploadResponse.status === 413) {
-                    this.showToast(`文件过大: ${errorMessage}`, 'danger');
-                } else {
-                    this.showToast(`文件上传失败: ${errorMessage}`, 'danger');
-                }
-                return;
+                const errorMessage = errorData.message || `文件上传失败 (${uploadResponse.status})`;
+                throw new Error(errorMessage);
             }
-
+    
             const uploadData = await uploadResponse.json();
             console.log('✅ 文件上传成功:', uploadData);
             
             if (!uploadData.client_id) {
-                throw new Error(uploadData.message || '上传失败');
+                throw new Error('未获取到客户端ID');
             }
-
+            const clientId = uploadData.client_id;
+    
+            // === 第二步：提交翻译任务 ===
             this.showUploadProgress('文件上传成功，正在提交翻译任务...');
-
-            // 提交翻译任务
-            const taskData = {
-                client_ip: uploadData.client_id,
-                source_lang: this.fileSourceLang.value,
-                target_lang: this.fileTargetLang.value,
-                via_eng: this.fileViaEnglish.checked
-            };
             
-            console.log('📤 提交翻译任务:', taskData);
-            
-            const translateResponse = await fetch('/translate/files', {
+            const taskFormData = new FormData();
+            taskFormData.append('client_id', clientId);
+            taskFormData.append('source_lang', this.fileSourceLang.value);
+            taskFormData.append('target_lang', this.fileTargetLang.value);
+            taskFormData.append('via_eng', this.fileViaEnglish.checked);
+    
+            // 提交翻译任务请求
+            const taskResponse = await fetch('/submit_translation_task', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(taskData)
+                body: taskFormData,
+                headers: { 'Accept': 'application/json' }
             });
-
-            console.log('📊 翻译任务响应状态:', translateResponse.status, translateResponse.statusText);
-
-            if (!translateResponse.ok) {
-                const errorData = await translateResponse.json().catch(() => ({}));
-                const errorMessage = errorData.message || `翻译任务提交失败 (${translateResponse.status})`;
+    
+            console.log('📊 翻译任务响应状态:', taskResponse.status, taskResponse.statusText);
+    
+            if (!taskResponse.ok) {
+                const errorData = await taskResponse.json().catch(() => ({}));
+                const errorMessage = errorData.message || `翻译任务提交失败 (${taskResponse.status})`;
                 
-                console.error('❌ 翻译任务提交失败:', errorMessage);
-                
-                if (translateResponse.status === 555) {
+                // 处理特定错误
+                if (taskResponse.status === 555) {
                     this.showToast('服务器繁忙，请稍后重试', 'warning');
                 } else {
                     this.showToast(`翻译任务提交失败: ${errorMessage}`, 'danger');
                 }
                 return;
             }
-
-            const translateData = await translateResponse.json();
-            console.log('✅ 翻译任务提交成功:', translateData);
+    
+            const taskData = await taskResponse.json();
+            console.log('✅ 翻译任务提交成功:', taskData);
             
-            if (!translateData.task_id) {
+            if (!taskData.task_id) {
                 throw new Error('翻译任务创建失败');
             }
-
+    
             // 显示任务状态
-            this.currentTaskId = translateData.task_id;
+            this.currentTaskId = taskData.task_id;
             this.showTaskStatus();
-            this.showToast('文件上传成功，翻译任务已开始', 'success');
-            this.hideUploadProgress();
+            this.showToast('翻译任务已开始', 'success');
             
         } catch (error) {
             console.error('❌ 上传或翻译失败:', error);
             this.showToast('操作失败: ' + error.message, 'danger');
         } finally {
             this.setUploadLoading(false);
+            this.hideUploadProgress();
         }
     }
 
