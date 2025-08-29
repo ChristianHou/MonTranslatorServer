@@ -141,8 +141,8 @@ body {
     outline: none;
 }
 
-.translation-textarea {
-    min-height: 200px;
+.form-control.translation-textarea {
+    min-height: 350px;
     resize: vertical;
     font-family: 'Inter', monospace;
     line-height: 1.5;

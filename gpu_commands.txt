@@ -1,0 +1,71 @@
+# GPU运行命令快速参考
+
+## 🚀 快速启动命令
+
+### Windows PowerShell (推荐)
+.\run_docker_desktop.ps1
+
+### 手动Docker命令
+# 基础GPU运行
+docker run --gpus all -p 8000:8000 -v "$(pwd)/cache:/app/cache" -v "$(pwd)/files:/app/files" -v "$(pwd)/config:/app/config" --name mon-translator-container mon-translator:gpu
+
+## 🎯 常用GPU配置
+
+### 单GPU
+docker run --gpus device=0 -p 8000:8000 -v "$(pwd)/cache:/app/cache" -v "$(pwd)/files:/app/files" -v "$(pwd)/config:/app/config" mon-translator:gpu
+
+### 多GPU (4卡服务器)
+docker run --gpus device=0,1,2,3 -p 8000:8000 -v "$(pwd)/cache:/app/cache" -v "$(pwd)/files:/app/files" -v "$(pwd)/config:/app/config" mon-translator:gpu
+
+### GPU内存限制
+docker run --gpus device=0 --memory=8g -p 8000:8000 -v "$(pwd)/cache:/app/cache" -v "$(pwd)/files:/app/files" -v "$(pwd)/config:/app/config" mon-translator:gpu
+
+### 后台运行
+docker run -d --gpus all -p 8000:8000 --restart=unless-stopped --name mon-translator-prod -v "$(pwd)/cache:/app/cache" -v "$(pwd)/files:/app/files" -v "$(pwd)/config:/app/config" -v "$(pwd)/logs:/app/logs" mon-translator:gpu
+
+## 🔍 状态检查
+
+### GPU状态
+docker exec -it mon-translator-container nvidia-smi
+
+### PyTorch GPU状态
+docker exec -it mon-translator-container python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU数:', torch.cuda.device_count())"
+
+### 容器日志
+docker logs -f mon-translator-container
+
+## 🛠️ 管理命令
+
+### 停止容器
+docker stop mon-translator-container
+
+### 重启容器
+docker restart mon-translator-container
+
+### 删除容器
+docker rm mon-translator-container
+
+### 查看资源使用
+docker stats mon-translator-container
+
+## 🌐 访问地址
+- 主界面: http://localhost:8000
+- 任务管理: http://localhost:8000/tasks
+- API文档: http://localhost:8000/docs
+
+## ⚡ 性能对比
+- CPU模式: 慢 (2-4GB内存)
+- 单GPU: 中等 (4-8GB内存)
+- 多GPU: 快 (8-16GB内存)
+- 4卡负载均衡: 最快 (12-24GB内存)
+
+## 🆘 故障排除
+
+### GPU不可用
+docker run --rm --gpus all nvidia/cuda:11.8-base-ubuntu20.04 nvidia-smi
+
+### 端口冲突
+docker run --gpus all -p 8001:8000 -v "$(pwd)/cache:/app/cache" -v "$(pwd)/files:/app/files" -v "$(pwd)/config:/app/config" mon-translator:gpu
+
+### 内存不足
+docker run --gpus all --memory=16g -p 8000:8000 -v "$(pwd)/cache:/app/cache" -v "$(pwd)/files:/app/files" -v "$(pwd)/config:/app/config" mon-translator:gpu

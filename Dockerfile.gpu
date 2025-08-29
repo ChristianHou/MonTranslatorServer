@@ -1,0 +1,111 @@
+# 基于NVIDIA CUDA 12.1和Ubuntu 22.04的Docker镜像
+# 兼容GTX 1080和T4显卡
+FROM nvidia/cuda:12.1.0-devel-ubuntu22.04
+
+# 设置环境变量
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+ENV CUDA_VERSION=12.1.0
+
+# 设置apt镜像源为国内源
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    curl \
+    wget \
+    git \
+    libgomp1 \
+    libopenblas-dev \
+    liblapack-dev \
+    gfortran \
+    libssl-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建Python软链接
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# 升级pip并设置pip配置
+RUN python -m pip install --upgrade pip setuptools wheel
+
+# 设置NumPy编译选项
+ENV OPENBLAS_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV OMP_NUM_THREADS=1
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制requirements.txt并安装Python依赖
+COPY requirements.txt .
+
+# 安装PyTorch CUDA 12.1版本（兼容GTX 1080）
+RUN pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu121
+
+# 设置应用绑定地址
+ENV HOST=0.0.0.0
+ENV PORT=8000
+
+# 安装其他依赖
+RUN pip install -r requirements.txt
+
+# 复制应用程序代码
+COPY . .
+
+# 确保配置文件存在
+RUN ls -la config/ || echo "config目录不存在"
+RUN ls -la config/*.ini || echo "没有找到.ini文件"
+
+# 创建必要的目录
+RUN mkdir -p /app/cache \
+    /app/files/upload \
+    /app/files/download \
+    /app/logs \
+    /app/config \
+    /app/data
+
+# 设置权限
+RUN chmod +x /app/start_server.py \
+    /app/server.py 
+
+# 暴露端口
+EXPOSE 8000
+
+# 创建启动脚本
+RUN echo '#!/bin/bash' > /app/start.sh && \
+    echo 'echo "=== Docker容器启动信息 ==="' >> /app/start.sh && \
+    echo 'echo "容器主机名: $(hostname)"' >> /app/start.sh && \
+    echo 'echo "工作目录: $(pwd)"' >> /app/start.sh && \
+    echo 'echo "Python版本: $(python --version)"' >> /app/start.sh && \
+    echo 'echo "=== GPU环境检查 ==="' >> /app/start.sh && \
+    echo 'nvidia-smi || echo "GPU不可用"' >> /app/start.sh && \
+    echo 'echo "=== PyTorch CUDA检查 ==="' >> /app/start.sh && \
+    echo 'python -c "import torch; print(f\"PyTorch版本: {torch.__version__}\"); print(f\"CUDA可用: {torch.cuda.is_available()}\"); print(f\"GPU数量: {torch.cuda.device_count()}\")"' >> /app/start.sh && \
+    echo 'echo "=== 网络配置检查 ==="' >> /app/start.sh && \
+    echo 'echo "HOST: ${HOST:-0.0.0.0}"' >> /app/start.sh && \
+    echo 'echo "PORT: ${PORT:-8000}"' >> /app/start.sh && \
+    echo 'echo "=== 启动前检查 ==="' >> /app/start.sh && \
+    echo 'python test_config_in_container.py || echo "配置检查失败，继续启动"' >> /app/start.sh && \
+    echo 'echo "=== 网络诊断 ==="' >> /app/start.sh && \
+    echo 'python test_container_network.py' >> /app/start.sh && \
+    echo 'echo "=== 启动应用 ==="' >> /app/start.sh && \
+    echo 'echo "应用将在 http://0.0.0.0:${PORT:-8000} 上运行"' >> /app/start.sh && \
+    echo 'echo "在Docker Desktop中，可通过 http://localhost:${PORT:-8000} 访问"' >> /app/start.sh && \
+    echo 'echo "等待5秒后启动应用..."' >> /app/start.sh && \
+    echo 'sleep 5' >> /app/start.sh && \
+    echo 'python server.py' >> /app/start.sh && \
+    chmod +x /app/start.sh
+
+# 设置启动命令
+CMD ["/app/start.sh"]

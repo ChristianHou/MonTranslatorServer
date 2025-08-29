@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  mongolian-translator:
+    build: .
+    container_name: mongolian-translator-server
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据目录
+      - ./data:/app/data
+      - ./cache:/app/cache
+      - ./files:/app/files
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      # 可以在这里设置环境变量
+      - MAX_TASKS=50
+      - MAX_CONCURRENT_TASKS=10
+      - ENABLE_CUDA=false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - translator-network
+
+  # GPU版本 - 基于CUDA 12.1
+  mongolian-translator-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: mongolian-translator-gpu
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data:/app/data
+      - ./cache:/app/cache
+      - ./files:/app/files
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - ENABLE_CUDA=true
+      - CUDA_VERSION=12.1
+      - MAX_TASKS=30
+      - MAX_CONCURRENT_TASKS=5
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - translator-network
+    profiles:
+      - gpu
+
+networks:
+  translator-network:
+    driver: bridge
+
+volumes:
+  data:
+    driver: local
+  cache:
+    driver: local
+  files:
+    driver: local
+  logs:
+    driver: local
+  config:
+    driver: local
+  models:
+    driver: local
